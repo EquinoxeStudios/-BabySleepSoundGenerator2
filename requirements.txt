@@ -1,0 +1,13 @@
+# Core dependencies
+numpy>=1.20.0
+scipy>=1.6.0
+
+# Optional dependencies - install for full functionality
+# noise>=1.2.2          # For more natural Perlin noise textures
+# pyloudnorm>=0.1.0     # For EBU R128 loudness normalization
+# soundfile>=0.10.3     # For advanced audio file handling
+# librosa>=0.8.0        # For advanced audio processing features
+# pyroomacoustics>=0.6.0 # For room impulse response simulations
+# pydub>=0.25.1         # For MP3 export (also requires ffmpeg)
+# matplotlib>=3.4.0     # For visualization
+# numba>=0.53.0         # For performance optimization
