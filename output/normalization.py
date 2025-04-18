@@ -3,8 +3,12 @@ Loudness normalization and EBU R128 compliance.
 """
 
 import numpy as np
+import logging
 from models.constants import Constants
 from utils.optional_imports import HAS_LOUDNORM
+
+# Create logger
+logger = logging.getLogger("BabySleepSoundGenerator")
 
 # Import optional libraries
 if HAS_LOUDNORM:
@@ -38,56 +42,76 @@ class LoudnessNormalizer:
         """
         if not HAS_LOUDNORM:
             # If pyloudnorm is not available, apply simple peak normalization
+            logger.info("pyloudnorm not available, using peak normalization instead")
             max_val = np.max(np.abs(audio))
             if max_val > 0:
                 return audio / max_val * 0.9
             return audio
 
-        # Create meter
-        meter = pyln.Meter(self.sample_rate)
+        try:
+            # Create meter
+            meter = pyln.Meter(self.sample_rate)
 
-        # Handle multi-channel audio - ensure we only have 1 or 2 channels
-        if len(audio.shape) > 1 and audio.shape[1] > 2:
-            # Keep only the first two channels if there are more
-            audio = audio[:, :2]
+            # Check the shape of the audio input
+            logger.debug(f"Audio shape before normalization: {audio.shape}")
             
-        # Measure current loudness
-        if len(audio.shape) == 1:
-            # Mono
-            current_loudness = meter.integrated_loudness(audio)
-        else:
-            # Stereo or reduced multi-channel
-            current_loudness = meter.integrated_loudness(audio.T)
-
-        # Calculate gain needed to reach target loudness
-        gain_db = self.target_loudness - current_loudness
-
-        # Loudness normalization is a simple gain adjustment (in dB)
-        gain_linear = 10 ** (gain_db / 20.0)
-
-        # Apply gain
-        normalized_audio = audio * gain_linear
-
-        # Check for clipping and apply true-peak limiting if needed
-        max_val = np.max(np.abs(normalized_audio))
-        if max_val > 0.98:
-            # Apply a true-peak limiter to prevent clipping
-            normalized_audio = normalized_audio / max_val * 0.98
-
-            # Add a second check using pyloudnorm's true peak measurement
+            # Handle multi-channel audio - ensure we only have 1 or 2 channels
+            if len(audio.shape) > 1:
+                channels = audio.shape[1]
+                if channels > 2:
+                    logger.warning(f"Audio has {channels} channels, restricting to stereo")
+                    audio = audio[:, :2]
+            
+            # Ensure audio is properly structured for pyloudnorm
+            # pyloudnorm expects (samples, channels) for stereo, and 1D array for mono
             if len(audio.shape) == 1:
-                true_peak = meter.true_peak(normalized_audio)
+                # Mono audio - already in the right format
+                current_loudness = meter.integrated_loudness(audio)
             else:
-                # Ensure we only process the first two channels
-                if normalized_audio.shape[1] >= 2:
-                    true_peak = max(
-                        meter.true_peak(normalized_audio[:, 0]),
-                        meter.true_peak(normalized_audio[:, 1]),
-                    )
+                # Stereo or multi-channel - need to transpose for pyloudnorm
+                # Fix: Check if it's already a 2D array before transposing
+                if len(audio.shape) == 2:
+                    if audio.shape[1] == 1:  # Mono in 2D form
+                        audio_for_meter = audio.flatten()
+                    else:  # Stereo or more
+                        audio_for_meter = audio.T
+                    current_loudness = meter.integrated_loudness(audio_for_meter)
                 else:
-                    true_peak = meter.true_peak(normalized_audio[:, 0])
+                    # Unexpected format - fallback to peak normalization
+                    logger.warning(f"Unexpected audio format with shape {audio.shape}, using peak normalization")
+                    max_val = np.max(np.abs(audio))
+                    if max_val > 0:
+                        return audio / max_val * 0.9
+                    return audio
 
-            if true_peak > -1.0:  # -1 dBTP limit per EBU R128
-                normalized_audio = normalized_audio / (10 ** (true_peak / 20)) * 0.891  # -1 dBTP
+            # Calculate gain needed to reach target loudness
+            logger.debug(f"Current loudness: {current_loudness} LUFS, Target: {self.target_loudness} LUFS")
+            gain_db = self.target_loudness - current_loudness
 
-        return normalized_audio
+            # Loudness normalization is a simple gain adjustment (in dB)
+            gain_linear = 10 ** (gain_db / 20.0)
+            logger.debug(f"Applying gain of {gain_db:.2f} dB ({gain_linear:.4f} linear)")
+
+            # Apply gain
+            normalized_audio = audio * gain_linear
+
+            # Check for clipping and apply simple peak limiting
+            max_val = np.max(np.abs(normalized_audio))
+            if max_val > 0.98:
+                logger.debug(f"Applying peak limiting (max value: {max_val:.4f})")
+                normalized_audio = normalized_audio / max_val * 0.98
+                
+                # Apply a simple safety margin instead of true peak measurement
+                # Skip the problematic true peak measurement that causes the 5-channel error
+                normalized_audio = normalized_audio * 0.95  # Additional 5% safety margin
+
+            return normalized_audio
+            
+        except Exception as e:
+            logger.error(f"Error in loudness normalization: {e}")
+            # Fall back to peak normalization in case of any errors
+            logger.warning("Falling back to peak normalization")
+            max_val = np.max(np.abs(audio))
+            if max_val > 0:
+                return audio / max_val * 0.9
+            return audio

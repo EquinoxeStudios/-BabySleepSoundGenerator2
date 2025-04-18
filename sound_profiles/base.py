@@ -84,32 +84,57 @@ class SoundProfileGenerator(ABC):
             Sanitized audio data
         """
         try:
-            # Convert to float32 if not already
-            if audio.dtype != np.float32:
-                audio = audio.astype(np.float32)
-                
-            # Check for NaN values and replace with zeros
-            if np.isnan(audio).any():
+            # Make a copy to avoid modifying the original
+            audio_copy = audio.copy()
+            
+            # First, check for NaN or infinite values and replace them
+            if np.isnan(audio_copy).any():
                 logger.warning("NaN values found in audio data, replacing with zeros")
-                audio = np.nan_to_num(audio)
+                audio_copy = np.nan_to_num(audio_copy, nan=0.0)
                 
-            # Check for infinite values and replace with max values
-            if np.isinf(audio).any():
+            if np.isinf(audio_copy).any():
                 logger.warning("Infinite values found in audio data, capping to valid range")
-                audio = np.clip(audio, -max_amplitude, max_amplitude)
+                audio_copy = np.nan_to_num(audio_copy, posinf=max_amplitude, neginf=-max_amplitude)
+            
+            # Check for very large values that could cause overflow
+            max_val = np.max(np.abs(audio_copy))
+            if max_val > 1e6:
+                logger.warning(f"Very large values detected in audio ({max_val}), scaling down to prevent overflow")
+                audio_copy = audio_copy / max_val * max_amplitude
                 
+            # Clip to ensure safe range before conversion
+            audio_copy = np.clip(audio_copy, -1.0, 1.0)
+                
+            # Convert to float32 safely (avoid overflow)
+            if audio_copy.dtype != np.float32:
+                try:
+                    # Use astype with 'copy=False' to avoid doubling memory usage
+                    audio_copy = audio_copy.astype(np.float32, copy=False)
+                except Exception as e:
+                    logger.error(f"Error converting to float32: {e}")
+                    # Perform explicit check for potential overflow
+                    if max_val > np.finfo(np.float32).max:
+                        audio_copy = audio_copy / max_val * 0.9  # Scale down if too large
+                    audio_copy = audio_copy.astype(np.float32)
+                    
             # Normalize if requested
             if normalize:
-                max_val = np.max(np.abs(audio))
+                max_val = np.max(np.abs(audio_copy))
                 if max_val > 0 and max_val != 1.0:  # Only normalize if needed
-                    audio = audio / max_val * max_amplitude
+                    audio_copy = audio_copy / max_val * max_amplitude
                     
-            return audio
+            # Check for any remaining issues
+            if np.isnan(audio_copy).any() or np.isinf(audio_copy).any():
+                logger.warning("NaN/Inf values still present after sanitization! Using zeros as fallback.")
+                audio_copy = np.zeros_like(audio_copy, dtype=np.float32)
+                    
+            return audio_copy
             
         except Exception as e:
             logger.error(f"Error sanitizing audio: {e}")
-            # Return original audio if sanitization fails
-            return audio
+            # Return zeros array if sanitization fails (safer than returning potentially corrupted audio)
+            shape = audio.shape if hasattr(audio, 'shape') else (len(audio),)
+            return np.zeros(shape, dtype=np.float32)
             
     def get_effective_duration(self, requested_duration: float) -> float:
         """
