@@ -161,61 +161,65 @@ class AudioExporter:
         if not filename.lower().endswith('.mp3'):
             filename = f"{os.path.splitext(filename)[0]}.mp3"
         
-        # Create a temporary file for the WAV
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-            temp_wav = temp_file.name
-        
-        # Save as temporary WAV
-        self.save_to_wav(audio, temp_wav)
-        
-        # Check if pydub is available and ffmpeg is accessible
-        if not HAS_PYDUB:
-            logger.warning("Pydub not installed or ffmpeg not found. Falling back to WAV format.")
-            # If MP3 export fails, return the WAV file
-            wav_filename = os.path.splitext(filename)[0] + ".wav"
-            os.rename(temp_wav, wav_filename)
-            return wav_filename
-        
+        # Create a temporary file for the WAV using context manager
+        temp_wav = None
         try:
-            # Load the audio using pydub
-            audio_segment = AudioSegment.from_wav(temp_wav)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_wav = temp_file.name
             
-            # Export as MP3 with broadcast-standard tags
-            tags = {
-                'title': os.path.splitext(os.path.basename(filename))[0],
-                'artist': 'BabySleepSoundGenerator',
-                'album': 'Sleep Sounds for Babies',
-                'comment': 'Created with BabySleepSoundGenerator',
-                'genre': 'Ambient'
-            }
+            # Save as temporary WAV
+            self.save_to_wav(audio, temp_wav)
             
-            # Make sure directory exists
-            os.makedirs(os.path.dirname(filename) if os.path.dirname(filename) else ".", exist_ok=True)
+            # Check if pydub is available and ffmpeg is accessible
+            if not HAS_PYDUB:
+                logger.warning("Pydub not installed or ffmpeg not found. Falling back to WAV format.")
+                # If MP3 export fails, return the WAV file
+                wav_filename = os.path.splitext(filename)[0] + ".wav"
+                os.rename(temp_wav, wav_filename)
+                return wav_filename
             
-            # Export with tags and bitrate
-            audio_segment.export(
-                filename,
-                format="mp3",
-                bitrate=bitrate,
-                tags=tags,
-                parameters=["-q:a", "0"]  # Use highest quality settings
-            )
-            
-            # Remove temporary WAV file
             try:
-                os.remove(temp_wav)
-            except OSError:
-                logger.warning(f"Could not remove temporary file {temp_wav}")
+                # Load the audio using pydub
+                audio_segment = AudioSegment.from_wav(temp_wav)
                 
-            logger.info(f"MP3 file saved: {filename}")
-            return filename
-            
-        except Exception as e:
-            logger.error(f"Error exporting to MP3: {e}")
-            logger.warning("Falling back to WAV format")
-            
-            # If MP3 export fails, return the WAV file
-            wav_filename = os.path.splitext(filename)[0] + ".wav"
-            os.rename(temp_wav, wav_filename)
-            logger.info(f"WAV file saved: {wav_filename}")
-            return wav_filename
+                # Export as MP3 with broadcast-standard tags
+                tags = {
+                    'title': os.path.splitext(os.path.basename(filename))[0],
+                    'artist': 'BabySleepSoundGenerator',
+                    'album': 'Sleep Sounds for Babies',
+                    'comment': 'Created with BabySleepSoundGenerator',
+                    'genre': 'Ambient'
+                }
+                
+                # Make sure directory exists
+                os.makedirs(os.path.dirname(filename) if os.path.dirname(filename) else ".", exist_ok=True)
+                
+                # Export with tags and bitrate
+                audio_segment.export(
+                    filename,
+                    format="mp3",
+                    bitrate=bitrate,
+                    tags=tags,
+                    parameters=["-q:a", "0"]  # Use highest quality settings
+                )
+                
+                logger.info(f"MP3 file saved: {filename}")
+                return filename
+                
+            except Exception as e:
+                logger.error(f"Error exporting to MP3: {e}")
+                logger.warning("Falling back to WAV format")
+                
+                # If MP3 export fails, return the WAV file
+                wav_filename = os.path.splitext(filename)[0] + ".wav"
+                os.rename(temp_wav, wav_filename)
+                logger.info(f"WAV file saved: {wav_filename}")
+                return wav_filename
+                
+        finally:
+            # Ensure temp file is cleaned up
+            if temp_wav and os.path.exists(temp_wav):
+                try:
+                    os.remove(temp_wav)
+                except OSError:
+                    logger.warning(f"Could not remove temporary file {temp_wav}")

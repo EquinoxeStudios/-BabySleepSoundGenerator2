@@ -114,12 +114,28 @@ class BabySleepSoundGenerator:
         # Safe listening duration at various levels (based on WHO guidelines)
         self.safe_duration_hours = Constants.WHO_SAFE_HOURS
 
-        # Initialize component generators with seed
-        self.noise_generator = NoiseGenerator(
-            sample_rate, self.use_perlin, modulation_depth=self.modulation_depth, seed=self.seed
+        # Initialize component generators using the factory pattern
+        self.noise_generator = SoundGeneratorFactory.create_generator(
+            "noise", 
+            sample_rate, 
+            self.use_perlin, 
+            modulation_depth=self.modulation_depth, 
+            seed=self.seed
         )
-        self.natural_generator = NaturalSoundGenerator(sample_rate, self.use_perlin, seed=self.seed)
-        self.womb_generator = WombSoundGenerator(sample_rate, self.use_perlin, seed=self.seed)
+        
+        self.natural_generator = SoundGeneratorFactory.create_generator(
+            "natural", 
+            sample_rate, 
+            self.use_perlin, 
+            seed=self.seed
+        )
+        
+        self.womb_generator = SoundGeneratorFactory.create_generator(
+            "womb", 
+            sample_rate, 
+            self.use_perlin, 
+            seed=self.seed
+        )
 
         # Initialize processors
         self.spatial_processor = SpatialProcessor(sample_rate, use_hrtf)
@@ -264,22 +280,27 @@ class BabySleepSoundGenerator:
 
         # Add each overlay with its mix ratio
         for overlay, ratio in zip(overlays, mix_ratios):
-            # Convert overlay to stereo if needed
+            # Validate sampling rate compatibility
+            # Note: This is a placeholder as we don't have direct access to overlay sampling rates
+            # In a real implementation, we would check this when recording or loading the audio
+            
+            # Handle shape conversion properly
             if len(overlay.shape) == 1 and is_stereo:
+                # Convert mono overlay to stereo
                 overlay_stereo = np.zeros((len(overlay), primary.shape[1]))
                 for c in range(primary.shape[1]):
                     overlay_stereo[:, c] = overlay
                 overlay = overlay_stereo
             elif len(overlay.shape) > 1 and not is_stereo:
                 # Take only the first channel if primary is mono
-                overlay = overlay[:, 0]
+                overlay = np.mean(overlay, axis=1)  # Average of all channels
 
             # Make sure the overlay is the same length as the primary
             if len(overlay) > len(mixed):
                 overlay = overlay[: len(mixed)]
             elif len(overlay) < len(mixed):
                 # Pad with zeros if necessary
-                if is_stereo:
+                if is_stereo and len(overlay.shape) > 1:
                     overlay = np.pad(overlay, ((0, len(mixed) - len(overlay)), (0, 0)))
                 else:
                     overlay = np.pad(overlay, (0, len(mixed) - len(overlay)))
@@ -294,7 +315,7 @@ class BabySleepSoundGenerator:
                     transition_samples = len(mixed) // 4
 
                 # Create a smooth envelope that gradually increases the overlay
-                if is_stereo:
+                if is_stereo and len(overlay.shape) > 1:
                     envelope = np.ones((len(mixed), primary.shape[1])) * ratio
                     
                     # Apply gradual fade-in at the beginning
@@ -316,10 +337,28 @@ class BabySleepSoundGenerator:
                     envelope[-transition_samples:] *= fade_out
 
                 # Apply the smooth mix
-                mixed = mixed * (1 - envelope) + overlay * envelope
+                if is_stereo and len(overlay.shape) > 1:
+                    mixed = mixed * (1 - envelope) + overlay * envelope
+                else:
+                    # Handle the case where overlay might be mono
+                    if is_stereo:
+                        # Convert overlay to stereo if needed
+                        for c in range(mixed.shape[1]):
+                            mixed[:, c] = mixed[:, c] * (1 - envelope) + overlay * envelope
+                    else:
+                        mixed = mixed * (1 - envelope) + overlay * envelope
             else:
                 # Standard mixing with constant ratio
-                mixed = mixed * (1 - ratio) + overlay * ratio
+                if is_stereo and len(overlay.shape) > 1:
+                    mixed = mixed * (1 - ratio) + overlay * ratio
+                else:
+                    # Handle the case where overlay might be mono
+                    if is_stereo:
+                        # Convert overlay to stereo if needed
+                        for c in range(mixed.shape[1]):
+                            mixed[:, c] = mixed[:, c] * (1 - ratio) + overlay * ratio
+                    else:
+                        mixed = mixed * (1 - ratio) + overlay * ratio
 
         # Normalize to prevent clipping
         max_val = np.max(np.abs(mixed))
@@ -342,13 +381,21 @@ class BabySleepSoundGenerator:
         Returns:
             Index of best loop point
         """
+        # Validate input
+        if len(audio) <= 0:
+            logger.warning("Empty audio provided to find_best_loop_point")
+            return 0
+            
         # Don't try to analyze too much data - use segments
         segment_samples = int(segment_duration * self.sample_rate)
-
+        
         # We'll look for matches between beginning and end segments
         if len(audio) <= 2 * segment_samples:
-            # If audio is too short, just use middle point
-            return len(audio) // 2
+            # If audio is too short, adjust segment size
+            segment_samples = len(audio) // 4
+            if segment_samples <= 0:
+                logger.warning("Audio too short for loop point detection")
+                return len(audio) // 2
 
         # For stereo, analyze first channel only
         if len(audio.shape) > 1:
@@ -388,6 +435,10 @@ class BabySleepSoundGenerator:
                 correlations.append(np.max(np.correlate(begin_segment, end_segment, 'valid')))
 
         # Find the best match from the coarse search
+        if not correlations:
+            logger.warning("No correlation points found, using default loop point")
+            return len(analysis_channel) - segment_samples
+            
         best_idx = np.argmax(correlations)
         best_correlation = correlations[best_idx]
         best_position = positions[best_idx]

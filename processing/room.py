@@ -145,38 +145,43 @@ class RoomAcousticsProcessor:
         """
         if not self.room_simulation:
             return audio
+        
+        try:
+            # Generate room impulse response if needed
+            if self.room_ir is None or len(self.room_ir) == 0:
+                self.room_ir = self._generate_room_impulse_response(room_size)
+                
+            # Convert mono to stereo if needed
+            if len(audio.shape) == 1:
+                audio_stereo = np.zeros((len(audio), 2))
+                audio_stereo[:, 0] = audio
+                audio_stereo[:, 1] = audio
+            else:
+                audio_stereo = audio
 
-        # Generate room impulse response if needed
-        if self.room_ir is None or len(self.room_ir) == 0:
-            self.room_ir = self._generate_room_impulse_response(room_size)
+            # Apply convolution for each channel using FFT convolution for efficiency
+            reverb_left = signal.fftconvolve(audio_stereo[:, 0], self.room_ir[:, 0], mode="full")
+            reverb_right = signal.fftconvolve(audio_stereo[:, 1], self.room_ir[:, 1], mode="full")
 
-        # Convert mono to stereo if needed
-        if len(audio.shape) == 1:
-            audio_stereo = np.zeros((len(audio), 2))
-            audio_stereo[:, 0] = audio
-            audio_stereo[:, 1] = audio
-        else:
-            audio_stereo = audio
+            # Trim to original length
+            reverb_left = reverb_left[: len(audio)]
+            reverb_right = reverb_right[: len(audio)]
 
-        # Apply convolution for each channel using FFT convolution for efficiency
-        reverb_left = signal.fftconvolve(audio_stereo[:, 0], self.room_ir[:, 0], mode="full")
-        reverb_right = signal.fftconvolve(audio_stereo[:, 1], self.room_ir[:, 1], mode="full")
+            # Combine channels
+            reverb = np.zeros((len(audio), 2))
+            reverb[:, 0] = reverb_left
+            reverb[:, 1] = reverb_right
 
-        # Trim to original length
-        reverb_left = reverb_left[: len(audio)]
-        reverb_right = reverb_right[: len(audio)]
+            # Mix with dry signal for more control: 80% wet (reverb), 20% dry (original)
+            mixed = 0.8 * reverb + 0.2 * audio_stereo
 
-        # Combine channels
-        reverb = np.zeros((len(audio), 2))
-        reverb[:, 0] = reverb_left
-        reverb[:, 1] = reverb_right
+            # Normalize to prevent clipping
+            max_val = np.max(np.abs(mixed))
+            if max_val > Constants.MAX_AUDIO_VALUE:
+                mixed = mixed / max_val * Constants.MAX_AUDIO_VALUE
 
-        # Mix with dry signal for more control: 80% wet (reverb), 20% dry (original)
-        mixed = 0.8 * reverb + 0.2 * audio_stereo
-
-        # Normalize to prevent clipping
-        max_val = np.max(np.abs(mixed))
-        if max_val > Constants.MAX_AUDIO_VALUE:
-            mixed = mixed / max_val * Constants.MAX_AUDIO_VALUE
-
-        return mixed
+            return mixed
+        except Exception as e:
+            logger.error(f"Room acoustics processing failed: {e}")
+            # Return original audio if processing fails
+            return audio
