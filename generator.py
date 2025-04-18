@@ -85,16 +85,16 @@ class BabySleepSoundGenerator:
         self.safe_duration_hours = Constants.WHO_SAFE_HOURS
 
         # Initialize component generators
-        self.noise_generator = NoiseGenerator(sample_rate, use_perlin, modulation_depth=self.modulation_depth)
-        self.natural_generator = NaturalSoundGenerator(sample_rate, use_perlin)
-        self.womb_generator = WombSoundGenerator(sample_rate, use_perlin)
+        self.noise_generator = NoiseGenerator(sample_rate, self.use_perlin, modulation_depth=self.modulation_depth)
+        self.natural_generator = NaturalSoundGenerator(sample_rate, self.use_perlin)
+        self.womb_generator = WombSoundGenerator(sample_rate, self.use_perlin)
 
         # Initialize processors
         self.spatial_processor = SpatialProcessor(sample_rate, use_hrtf)
         self.room_processor = RoomAcousticsProcessor(sample_rate, room_simulation)
         self.frequency_processor = FrequencyProcessor(sample_rate)
         self.modulation_processor = ModulationProcessor(
-            sample_rate, use_perlin, depth=self.modulation_depth, rate=self.modulation_rate
+            sample_rate, self.use_perlin, depth=self.modulation_depth, rate=self.modulation_rate
         )
         
         # Initialize effect modules

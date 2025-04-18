@@ -30,6 +30,26 @@ class WombSoundGenerator(SoundProfileGenerator):
         """
         super().__init__(sample_rate, use_perlin)
 
+    def generate(self, duration_seconds: int, **kwargs) -> np.ndarray:
+        """
+        Generate a womb-related sound based on the specified type.
+        
+        Args:
+            duration_seconds: Duration in seconds
+            **kwargs: Additional parameters including 'sound_type'
+            
+        Returns:
+            Sound profile as numpy array
+        """
+        sound_type = kwargs.get('sound_type', 'womb')
+        
+        if sound_type == 'womb':
+            return self.generate_womb_simulation(duration_seconds)
+        elif sound_type == 'umbilical_swish':
+            return self.generate_umbilical_swish(duration_seconds)
+        else:
+            raise ValueError(f"Unknown womb sound type: {sound_type}")
+
     def generate_womb_simulation(self, duration_seconds: int) -> np.ndarray:
         """
         Simulate womb sounds with enhanced realism

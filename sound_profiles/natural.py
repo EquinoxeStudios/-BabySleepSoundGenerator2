@@ -31,6 +31,29 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         """
         super().__init__(sample_rate, use_perlin)
     
+    def generate(self, duration_seconds: int, **kwargs) -> np.ndarray:
+        """
+        Generate a natural sound based on the specified type.
+        
+        Args:
+            duration_seconds: Duration in seconds
+            **kwargs: Additional parameters including 'sound_type'
+            
+        Returns:
+            Sound profile as numpy array
+        """
+        sound_type = kwargs.get('sound_type', 'heartbeat')
+        
+        if sound_type == 'heartbeat':
+            heartbeat_params = kwargs.get('heartbeat_params', None)
+            return self.generate_heartbeat(duration_seconds, heartbeat_params)
+        elif sound_type == 'shushing':
+            return self.generate_shushing_sound(duration_seconds)
+        elif sound_type == 'fan':
+            return self.generate_fan_sound(duration_seconds)
+        else:
+            raise ValueError(f"Unknown natural sound type: {sound_type}")
+    
     def generate_heartbeat(
         self,
         duration_seconds: int,
