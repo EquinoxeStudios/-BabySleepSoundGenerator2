@@ -111,14 +111,14 @@ class BabySleepSoundGenerator:
         
         # Define available sound profiles
         self.sound_profiles = {
-            "white": self.noise_generator.generate_white_noise,
-            "pink": self.noise_generator.generate_pink_noise_fft,  # Using FFT method
-            "brown": self.noise_generator.generate_brown_noise_fft,  # Using FFT method
-            "womb": self.womb_generator.generate_womb_simulation,
-            "heartbeat": self.natural_generator.generate_heartbeat,
-            "shushing": self.natural_generator.generate_shushing_sound,
-            "fan": self.natural_generator.generate_fan_sound,
-            "umbilical_swish": self.womb_generator.generate_umbilical_swish,  # New sound profile
+            "white": lambda duration, **kwargs: self.noise_generator.generate(duration, sound_type="white", **kwargs),
+            "pink": lambda duration, **kwargs: self.noise_generator.generate(duration, sound_type="pink", **kwargs),
+            "brown": lambda duration, **kwargs: self.noise_generator.generate(duration, sound_type="brown", **kwargs),
+            "womb": lambda duration, **kwargs: self.womb_generator.generate(duration, sound_type="womb", **kwargs),
+            "heartbeat": lambda duration, **kwargs: self.natural_generator.generate(duration, sound_type="heartbeat", **kwargs),
+            "shushing": lambda duration, **kwargs: self.natural_generator.generate(duration, sound_type="shushing", **kwargs),
+            "fan": lambda duration, **kwargs: self.natural_generator.generate(duration, sound_type="fan", **kwargs),
+            "umbilical_swish": lambda duration, **kwargs: self.womb_generator.generate(duration, sound_type="umbilical_swish", **kwargs),
         }
 
         # Predefined baby problems and recommended profiles with enhanced scientific parameters

@@ -9,6 +9,7 @@ import logging
 
 from sound_profiles.base import SoundProfileGenerator
 from utils.optional_imports import HAS_PERLIN
+# Direct import from perlin_utils instead of through utils.__init__
 from utils.perlin_utils import generate_perlin_noise, apply_modulation
 
 logger = logging.getLogger("BabySleepSoundGenerator")
@@ -27,19 +28,18 @@ class WombSoundGenerator(SoundProfileGenerator):
         """
         super().__init__(sample_rate, use_perlin)
 
-    def generate(self, duration_seconds: int, **kwargs) -> np.ndarray:
+    def generate(self, duration_seconds: int, sound_type: str = "womb", **kwargs) -> np.ndarray:
         """
         Generate a womb-related sound based on the specified type.
         
         Args:
             duration_seconds: Duration in seconds
-            **kwargs: Additional parameters including 'sound_type'
+            sound_type: Type of womb sound (womb, umbilical_swish)
+            **kwargs: Additional parameters
             
         Returns:
             Sound profile as numpy array
         """
-        sound_type = kwargs.get('sound_type', 'womb')
-        
         if sound_type == 'womb':
             return self.generate_womb_simulation(duration_seconds)
         elif sound_type == 'umbilical_swish':

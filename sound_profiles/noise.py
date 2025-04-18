@@ -8,6 +8,7 @@ from scipy import signal
 
 from sound_profiles.base import SoundProfileGenerator
 from utils.optional_imports import HAS_PERLIN
+# Direct import from perlin_utils instead of through utils.__init__
 from utils.perlin_utils import generate_perlin_noise, apply_modulation, generate_dynamic_modulation
 
 logger = logging.getLogger("BabySleepSoundGenerator")
@@ -28,26 +29,26 @@ class NoiseGenerator(SoundProfileGenerator):
         super().__init__(sample_rate, use_perlin)
         self.modulation_depth = modulation_depth
         
-    def generate(self, duration_seconds: int, noise_type: str = "white", **kwargs) -> np.ndarray:
+    def generate(self, duration_seconds: int, sound_type: str = "white", **kwargs) -> np.ndarray:
         """
         Generate specified noise color.
         
         Args:
             duration_seconds: Duration in seconds
-            noise_type: Type of noise to generate (white, pink, brown)
+            sound_type: Type of noise to generate (white, pink, brown)
             **kwargs: Additional parameters
             
         Returns:
             Noise array
         """
-        if noise_type == "white":
-            return self.generate_white_noise(duration_seconds)
-        elif noise_type == "pink":
-            return self.generate_pink_noise_fft(duration_seconds)
-        elif noise_type == "brown":
-            return self.generate_brown_noise_fft(duration_seconds)
+        if sound_type == "white":
+            return self.generate_white_noise(duration_seconds, **kwargs)
+        elif sound_type == "pink":
+            return self.generate_pink_noise_fft(duration_seconds, **kwargs)
+        elif sound_type == "brown":
+            return self.generate_brown_noise_fft(duration_seconds, **kwargs)
         else:
-            raise ValueError(f"Unknown noise type: {noise_type}")
+            raise ValueError(f"Unknown noise type: {sound_type}")
     
     def _apply_dynamic_modulation(self, audio: np.ndarray) -> np.ndarray:
         """
@@ -81,13 +82,14 @@ class NoiseGenerator(SoundProfileGenerator):
 
         return modulated_audio
 
-    def generate_white_noise(self, duration_seconds: int) -> np.ndarray:
+    def generate_white_noise(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate enhanced white noise with natural texture.
         Uses Perlin noise if available, otherwise falls back to traditional method.
         
         Args:
             duration_seconds: Length of the sound in seconds
+            **kwargs: Additional parameters
             
         Returns:
             White noise array
@@ -121,13 +123,14 @@ class NoiseGenerator(SoundProfileGenerator):
 
         return noise_array
 
-    def generate_pink_noise_fft(self, duration_seconds: int) -> np.ndarray:
+    def generate_pink_noise_fft(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate pink noise using FFT-based spectral shaping.
         This creates more accurate 1/f spectrum than filtered white noise.
         
         Args:
             duration_seconds: Length of the sound in seconds
+            **kwargs: Additional parameters
             
         Returns:
             Pink noise array
@@ -171,13 +174,14 @@ class NoiseGenerator(SoundProfileGenerator):
 
         return pink_noise
 
-    def generate_brown_noise_fft(self, duration_seconds: int) -> np.ndarray:
+    def generate_brown_noise_fft(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate brown/red noise using FFT-based spectral shaping.
         Brown noise has energy proportional to 1/f²
         
         Args:
             duration_seconds: Length of the sound in seconds
+            **kwargs: Additional parameters
             
         Returns:
             Brown noise array

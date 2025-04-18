@@ -10,6 +10,7 @@ import logging
 from sound_profiles.base import SoundProfileGenerator
 from models.parameters import HeartbeatParameters, DynamicShushing, ParentalVoice
 from utils.optional_imports import HAS_PERLIN
+# Direct import from perlin_utils instead of through utils.__init__
 from utils.perlin_utils import generate_perlin_noise, apply_modulation
 
 logger = logging.getLogger("BabySleepSoundGenerator")
@@ -28,19 +29,18 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         """
         super().__init__(sample_rate, use_perlin)
     
-    def generate(self, duration_seconds: int, **kwargs) -> np.ndarray:
+    def generate(self, duration_seconds: int, sound_type: str = "heartbeat", **kwargs) -> np.ndarray:
         """
         Generate a natural sound based on the specified type.
         
         Args:
             duration_seconds: Duration in seconds
-            **kwargs: Additional parameters including 'sound_type'
+            sound_type: Type of natural sound (heartbeat, shushing, fan)
+            **kwargs: Additional parameters including heartbeat_params for heartbeat sounds
             
         Returns:
             Sound profile as numpy array
         """
-        sound_type = kwargs.get('sound_type', 'heartbeat')
-        
         if sound_type == 'heartbeat':
             heartbeat_params = kwargs.get('heartbeat_params', None)
             return self.generate_heartbeat(duration_seconds, heartbeat_params)

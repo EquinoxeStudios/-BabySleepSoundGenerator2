@@ -5,6 +5,7 @@ Sleep cycle modulation effects.
 import numpy as np
 from models.parameters import SleepCycleModulation
 from utils.optional_imports import HAS_PERLIN
+# Direct import from perlin_utils instead of through utils.__init__
 from utils.perlin_utils import generate_perlin_noise, apply_modulation
 
 
