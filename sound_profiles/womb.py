@@ -9,12 +9,9 @@ import logging
 
 from sound_profiles.base import SoundProfileGenerator
 from utils.optional_imports import HAS_PERLIN
+from utils.perlin_utils import generate_perlin_noise, apply_modulation
 
 logger = logging.getLogger("BabySleepSoundGenerator")
-
-# Import optional libraries
-if HAS_PERLIN:
-    import noise
 
 
 class WombSoundGenerator(SoundProfileGenerator):
@@ -81,7 +78,12 @@ class WombSoundGenerator(SoundProfileGenerator):
         # Create more organic, natural variations for maternal sounds
         if HAS_PERLIN and self.use_perlin:
             # Generate slow perlin noise for breathing rhythm
-            breathing_noise = self._generate_perlin_noise(duration_seconds, octaves=1, persistence=0.5)
+            breathing_noise = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds, 
+                octaves=1, 
+                persistence=0.5
+            )
             
             # Scale to appropriate breathing rate (12-20 breaths per minute)
             breathing_scale = 16 / 60  # breaths per second
@@ -90,7 +92,12 @@ class WombSoundGenerator(SoundProfileGenerator):
             breathing_modulation = 0.15 * breathing_noise[indices]
 
             # Add a secondary slower modulation for deeper bodily rhythms
-            deep_rhythm_noise = self._generate_perlin_noise(duration_seconds, octaves=1, persistence=0.5)
+            deep_rhythm_noise = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds, 
+                octaves=1, 
+                persistence=0.5
+            )
             deep_indices = np.linspace(0, len(deep_rhythm_noise) // 200, samples)
             deep_indices = np.clip(deep_indices.astype(int), 0, len(deep_rhythm_noise) - 1)
             deep_modulation = 0.1 * deep_rhythm_noise[deep_indices]
@@ -160,7 +167,12 @@ class WombSoundGenerator(SoundProfileGenerator):
 
         if HAS_PERLIN and self.use_perlin:
             # Use perlin noise for organic, natural pulse variations
-            pulse_noise = self._generate_perlin_noise(duration_seconds / 2, octaves=2, persistence=0.5)
+            pulse_noise = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds / 2, 
+                octaves=2, 
+                persistence=0.5
+            )
             
             # Map to reasonable range and stretch
             indices = np.linspace(0, len(pulse_noise) - 1, samples)
@@ -191,7 +203,12 @@ class WombSoundGenerator(SoundProfileGenerator):
 
         # Create a different pulse pattern, slightly offset
         if HAS_PERLIN and self.use_perlin:
-            pulse_noise2 = self._generate_perlin_noise(duration_seconds / 2, octaves=2, persistence=0.6)
+            pulse_noise2 = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds / 2, 
+                octaves=2, 
+                persistence=0.6
+            )
             indices2 = np.linspace(0, len(pulse_noise2) - 1, samples)
             indices2 = np.clip(indices2.astype(int), 0, len(pulse_noise2) - 1)
             pulse_factor2 = 0.4 + 0.3 * (pulse_noise2[indices2] * 0.5 + 0.5)  # Different range
@@ -213,7 +230,12 @@ class WombSoundGenerator(SoundProfileGenerator):
 
         # Add subtle low-frequency pressure variations
         if HAS_PERLIN and self.use_perlin:
-            pressure_variation = self._generate_perlin_noise(duration_seconds / 10, octaves=1, persistence=0.5)
+            pressure_variation = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds / 10, 
+                octaves=1, 
+                persistence=0.5
+            )
             indices3 = np.linspace(0, len(pressure_variation) - 1, samples)
             indices3 = np.clip(indices3.astype(int), 0, len(pressure_variation) - 1)
             pressure_factor = 0.9 + 0.1 * pressure_variation[indices3]
@@ -233,46 +255,3 @@ class WombSoundGenerator(SoundProfileGenerator):
             umbilical_sound = umbilical_sound / max_val * 0.9
 
         return umbilical_sound
-        
-    def _generate_perlin_noise(
-        self, duration_seconds: int, octaves: int = 4, persistence: float = 0.5
-    ) -> np.ndarray:
-        """
-        Generate organic noise using Perlin/Simplex noise algorithm.
-        This creates more natural textures than basic random noise.
-
-        Args:
-            duration_seconds: Length of the audio in seconds
-            octaves: Number of layers of detail
-            persistence: How much each octave contributes to the overall shape
-
-        Returns:
-            Numpy array of noise with natural patterns
-        """
-        if not HAS_PERLIN:
-            # Fall back to regular noise if library not available
-            return np.random.normal(0, 0.5, int(duration_seconds * self.sample_rate))
-
-        samples = int(duration_seconds * self.sample_rate)
-        result = np.zeros(samples)
-
-        # Create seeds for each octave
-        seeds = [random.randint(0, 1000) for _ in range(octaves)]
-
-        # Parameter determines how "organic" the noise feels
-        scale_factor = 0.002  # Controls the "speed" of changes
-
-        # Standard implementation
-        for i in range(samples):
-            value = 0
-            for j in range(octaves):
-                # Each octave uses a different seed and scale
-                octave_scale = scale_factor * (2**j)
-                value += persistence**j * noise.pnoise1(i * octave_scale, base=seeds[j])
-
-            result[i] = value
-
-        # Normalize to +/- 0.5 range
-        result = 0.5 * result / np.max(np.abs(result))
-
-        return result.astype(np.float32)

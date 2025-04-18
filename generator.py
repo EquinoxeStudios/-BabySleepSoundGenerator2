@@ -35,6 +35,7 @@ from output.export import AudioExporter
 from output.visualization import SpectrumVisualizer
 
 from utils.optional_imports import HAS_PERLIN, HAS_LOUDNORM, HAS_LIBROSA, HAS_PYROOMACOUSTICS
+from utils.perlin_utils import generate_perlin_noise, apply_modulation, generate_dynamic_modulation
 
 logger = logging.getLogger("BabySleepSoundGenerator")
 
@@ -397,10 +398,10 @@ class BabySleepSoundGenerator:
         fade_out = np.cos(np.linspace(0, np.pi / 2, crossfade_samples)) ** 2
         fade_in = np.sin(np.linspace(0, np.pi / 2, crossfade_samples)) ** 2
 
-        # Apply crossfade efficiently
+        # Apply crossfade efficiently using apply_modulation
         if is_stereo:
             # Create crossfade for stereo
-            crossfaded = end * fade_out[:, np.newaxis] + beginning * fade_in[:, np.newaxis]
+            crossfaded = apply_modulation(end, fade_out) + apply_modulation(beginning, fade_in)
             
             # Replace the end with the crossfaded section
             looped = audio.copy()

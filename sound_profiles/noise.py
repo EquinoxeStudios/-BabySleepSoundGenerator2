@@ -3,21 +3,14 @@ Noise generators for various noise colors (white, pink, brown).
 """
 
 import logging
-import random
 import numpy as np
 from scipy import signal
 
 from sound_profiles.base import SoundProfileGenerator
-from utils.optional_imports import HAS_PERLIN, HAS_NUMBA
+from utils.optional_imports import HAS_PERLIN
+from utils.perlin_utils import generate_perlin_noise, apply_modulation, generate_dynamic_modulation
 
 logger = logging.getLogger("BabySleepSoundGenerator")
-
-# Import optional libraries
-if HAS_PERLIN:
-    import noise
-    
-if HAS_NUMBA:
-    import numba
 
 
 class NoiseGenerator(SoundProfileGenerator):
@@ -70,29 +63,16 @@ class NoiseGenerator(SoundProfileGenerator):
         samples = len(audio)
         duration_seconds = samples / self.sample_rate
 
-        # Create very slow modulation curve
-        if HAS_PERLIN and self.use_perlin:
-            # Use perlin noise for organic modulation
-            mod_curve = self._generate_perlin_noise(duration_seconds, octaves=1, persistence=0.5)
-            
-            # Stretch the curve to be very slow (only a few cycles over the whole duration)
-            indices = np.linspace(0, len(mod_curve) // 100, samples).astype(int)
-            mod_curve = mod_curve[indices]
-        else:
-            # Fallback to sine wave modulation
-            t = np.linspace(0, duration_seconds * 0.002 * 2 * np.pi, samples)
-            mod_curve = np.sin(t)
-
-        # Scale to desired modulation depth
-        mod_curve = 1.0 + self.modulation_depth * mod_curve
+        # Generate modulation curve
+        mod_curve = generate_dynamic_modulation(
+            self.sample_rate,
+            duration_seconds,
+            depth=self.modulation_depth,
+            use_perlin=self.use_perlin
+        )
 
         # Apply the modulation efficiently
-        if len(audio.shape) > 1:
-            # Stereo
-            modulated_audio = audio * mod_curve[:, np.newaxis]
-        else:
-            # Mono
-            modulated_audio = audio * mod_curve
+        modulated_audio = apply_modulation(audio, mod_curve)
 
         # Normalize if needed
         max_val = np.max(np.abs(modulated_audio))
@@ -100,75 +80,6 @@ class NoiseGenerator(SoundProfileGenerator):
             modulated_audio = modulated_audio / max_val * 0.95
 
         return modulated_audio
-
-    def _generate_perlin_noise(
-        self, duration_seconds: int, octaves: int = 4, persistence: float = 0.5
-    ) -> np.ndarray:
-        """
-        Generate organic noise using Perlin/Simplex noise algorithm.
-        This creates more natural textures than basic random noise.
-
-        Args:
-            duration_seconds: Length of the audio in seconds
-            octaves: Number of layers of detail
-            persistence: How much each octave contributes to the overall shape
-
-        Returns:
-            Numpy array of noise with natural patterns
-        """
-        if not HAS_PERLIN:
-            # Fall back to regular noise if library not available
-            return np.random.normal(0, 0.5, int(duration_seconds * self.sample_rate))
-
-        samples = int(duration_seconds * self.sample_rate)
-        result = np.zeros(samples)
-
-        # Create seeds for each octave
-        seeds = [random.randint(0, 1000) for _ in range(octaves)]
-
-        # Parameter determines how "organic" the noise feels
-        scale_factor = 0.002  # Controls the "speed" of changes
-
-        # Use numba for acceleration if available
-        if HAS_NUMBA:
-            result = self._generate_perlin_noise_numba(samples, octaves, persistence, scale_factor, seeds)
-        else:
-            # Standard implementation
-            for i in range(samples):
-                value = 0
-                for j in range(octaves):
-                    # Each octave uses a different seed and scale
-                    octave_scale = scale_factor * (2**j)
-                    value += persistence**j * noise.pnoise1(i * octave_scale, base=seeds[j])
-
-                result[i] = value
-
-        # Normalize to +/- 0.5 range
-        result = 0.5 * result / np.max(np.abs(result))
-
-        return result.astype(np.float32)
-    
-    def _generate_perlin_noise_numba(self, samples, octaves, persistence, scale_factor, seeds):
-        """Numba-accelerated Perlin noise generation if available"""
-        if not HAS_NUMBA:
-            return np.zeros(samples)
-            
-        @numba.jit(nopython=True)
-        def _generate_noise(samples, octaves, persistence, scale_factor, seeds):
-            result = np.zeros(samples)
-            for i in range(samples):
-                value = 0.0
-                for j in range(octaves):
-                    # Each octave uses a different seed and scale
-                    octave_scale = scale_factor * (2**j)
-                    # Simplified noise approximation for numba compatibility
-                    x = i * octave_scale + seeds[j]
-                    n = (np.sin(x) * 43758.5453) % 1
-                    value += persistence**j * n
-                result[i] = value
-            return result
-            
-        return _generate_noise(samples, octaves, persistence, scale_factor, np.array(seeds))
 
     def generate_white_noise(self, duration_seconds: int) -> np.ndarray:
         """
@@ -185,7 +96,12 @@ class NoiseGenerator(SoundProfileGenerator):
 
         if self.use_perlin and HAS_PERLIN:
             # Use Perlin noise for a more organic texture
-            noise_array = self._generate_perlin_noise(duration_seconds, octaves=6, persistence=0.7)
+            noise_array = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds, 
+                octaves=6, 
+                persistence=0.7
+            )
 
             # Apply whitening filter to ensure flat spectrum using FFT
             spectrum = np.fft.rfft(noise_array)
@@ -220,7 +136,12 @@ class NoiseGenerator(SoundProfileGenerator):
 
         # Start with white noise
         if self.use_perlin and HAS_PERLIN:
-            white = self._generate_perlin_noise(duration_seconds, octaves=6, persistence=0.7)
+            white = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds, 
+                octaves=6, 
+                persistence=0.7
+            )
         else:
             white = np.random.normal(0, 0.5, samples)
 
@@ -265,7 +186,12 @@ class NoiseGenerator(SoundProfileGenerator):
 
         # Start with white noise
         if self.use_perlin and HAS_PERLIN:
-            white = self._generate_perlin_noise(duration_seconds, octaves=6, persistence=0.7)
+            white = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds, 
+                octaves=6, 
+                persistence=0.7
+            )
         else:
             white = np.random.normal(0, 0.5, samples)
 

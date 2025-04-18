@@ -10,12 +10,9 @@ import logging
 from sound_profiles.base import SoundProfileGenerator
 from models.parameters import HeartbeatParameters, DynamicShushing, ParentalVoice
 from utils.optional_imports import HAS_PERLIN
+from utils.perlin_utils import generate_perlin_noise, apply_modulation
 
 logger = logging.getLogger("BabySleepSoundGenerator")
-
-# Import optional libraries
-if HAS_PERLIN:
-    import noise
 
 
 class NaturalSoundGenerator(SoundProfileGenerator):
@@ -94,7 +91,12 @@ class NaturalSoundGenerator(SoundProfileGenerator):
 
             if HAS_PERLIN and self.use_perlin:
                 # Generate smooth perlin noise for natural BPM variations
-                bpm_noise = self._generate_perlin_noise(duration_seconds / 10, octaves=1, persistence=0.5)
+                bpm_noise = generate_perlin_noise(
+                    self.sample_rate, 
+                    duration_seconds / 10, 
+                    octaves=1, 
+                    persistence=0.5
+                )
                 
                 # Stretch the noise to match desired cycle period
                 indices = np.linspace(0, len(bpm_noise) - 1, int(cycles * 100) + 1)
@@ -160,7 +162,12 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         # Add slight natural variation to heartbeat amplitude
         if HAS_PERLIN and self.use_perlin:
             # Generate very slow perlin noise for natural amplitude variations
-            amp_variation = self._generate_perlin_noise(duration_seconds / 5, octaves=1, persistence=0.5)
+            amp_variation = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds / 5, 
+                octaves=1, 
+                persistence=0.5
+            )
             
             # Stretch to get only a few variations over the whole duration
             indices = np.linspace(0, len(amp_variation) - 1, len(beat_samples))
@@ -254,7 +261,12 @@ class NaturalSoundGenerator(SoundProfileGenerator):
 
         if HAS_PERLIN and self.use_perlin:
             # Use perlin noise for organic, human-like variations
-            shush_rhythm = self._generate_perlin_noise(duration_seconds, octaves=2, persistence=0.6)
+            shush_rhythm = generate_perlin_noise(
+                self.sample_rate,
+                duration_seconds, 
+                octaves=2, 
+                persistence=0.6
+            )
 
             # Scale the noise to the appropriate rhythm rate
             rhythm_scale = 1.5  # Average shushes per second
@@ -332,7 +344,12 @@ class NaturalSoundGenerator(SoundProfileGenerator):
 
         if HAS_PERLIN and self.use_perlin:
             # Use perlin noise for natural speed variations
-            speed_variation = self._generate_perlin_noise(duration_seconds, octaves=1, persistence=0.5)
+            speed_variation = generate_perlin_noise(
+                self.sample_rate,
+                duration_seconds, 
+                octaves=1, 
+                persistence=0.5
+            )
             
             # Stretch to get only a few variations over the duration
             indices = np.linspace(0, len(speed_variation) // 100, samples)
@@ -425,8 +442,11 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         # Create Perlin noise as a base for non-regular cry patterns
         if HAS_PERLIN and self.use_perlin:
             # Generate very slow perlin noise for cry likelihood
-            cry_likelihood = self._generate_perlin_noise(
-                samples / self.sample_rate / 10, octaves=1, persistence=0.5
+            cry_likelihood = generate_perlin_noise(
+                self.sample_rate,
+                samples / self.sample_rate / 10, 
+                octaves=1, 
+                persistence=0.5
             )
             # Stretch to audio length
             indices = np.linspace(0, len(cry_likelihood) - 1, samples)
@@ -484,10 +504,7 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 envelope[sustain_end:ramp_down_end] = ramp_down
 
         # Apply envelope to shushing efficiently
-        if is_stereo:
-            dynamic_shushing = shushing * envelope[:, np.newaxis]
-        else:
-            dynamic_shushing = shushing * envelope
+        dynamic_shushing = apply_modulation(shushing, envelope)
 
         # Mix with original audio (assuming shushing is already mixed at 0.3 ratio)
         if is_stereo:
@@ -585,7 +602,8 @@ class NaturalSoundGenerator(SoundProfileGenerator):
 
             if hum_len > 0:
                 if is_stereo:
-                    hum_output[start_idx:end_idx] = hum[:hum_len, np.newaxis]
+                    for c in range(audio.shape[1]):
+                        hum_output[start_idx:end_idx, c] = hum[:hum_len]
                 else:
                     hum_output[start_idx:end_idx] = hum[:hum_len]
 
@@ -593,46 +611,3 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         output = audio * (1 - mix_ratio) + hum_output * mix_ratio
 
         return output
-        
-    def _generate_perlin_noise(
-        self, duration_seconds: int, octaves: int = 4, persistence: float = 0.5
-    ) -> np.ndarray:
-        """
-        Generate organic noise using Perlin/Simplex noise algorithm.
-        This creates more natural textures than basic random noise.
-
-        Args:
-            duration_seconds: Length of the audio in seconds
-            octaves: Number of layers of detail
-            persistence: How much each octave contributes to the overall shape
-
-        Returns:
-            Numpy array of noise with natural patterns
-        """
-        if not HAS_PERLIN:
-            # Fall back to regular noise if library not available
-            return np.random.normal(0, 0.5, int(duration_seconds * self.sample_rate))
-
-        samples = int(duration_seconds * self.sample_rate)
-        result = np.zeros(samples)
-
-        # Create seeds for each octave
-        seeds = [random.randint(0, 1000) for _ in range(octaves)]
-
-        # Parameter determines how "organic" the noise feels
-        scale_factor = 0.002  # Controls the "speed" of changes
-
-        # Standard implementation
-        for i in range(samples):
-            value = 0
-            for j in range(octaves):
-                # Each octave uses a different seed and scale
-                octave_scale = scale_factor * (2**j)
-                value += persistence**j * noise.pnoise1(i * octave_scale, base=seeds[j])
-
-            result[i] = value
-
-        # Normalize to +/- 0.5 range
-        result = 0.5 * result / np.max(np.abs(result))
-
-        return result.astype(np.float32)

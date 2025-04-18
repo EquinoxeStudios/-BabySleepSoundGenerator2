@@ -4,6 +4,7 @@ Dynamic volume adjustment effects.
 
 import numpy as np
 from models.parameters import DynamicVolume, SafetyFeatures
+from utils.perlin_utils import apply_modulation
 
 
 class DynamicVolumeProcessor:
@@ -77,13 +78,7 @@ class DynamicVolumeProcessor:
                 envelope[fade_end:] = reduced_volume
 
         # Apply the envelope efficiently
-        is_stereo = len(audio.shape) > 1
-        if is_stereo:
-            # Stereo
-            output = audio * (envelope / initial_volume)[:, np.newaxis]
-        else:
-            # Mono
-            output = audio * (envelope / initial_volume)
+        output = apply_modulation(audio, envelope / initial_volume)
 
         return output
 
@@ -134,12 +129,6 @@ class DynamicVolumeProcessor:
         envelope[shutoff_sample + fade_samples :] = 0  # Complete silence after fade
 
         # Apply envelope efficiently
-        is_stereo = len(audio.shape) > 1
-        if is_stereo:
-            # Stereo
-            output = audio * envelope[:, np.newaxis]
-        else:
-            # Mono
-            output = audio * envelope
+        output = apply_modulation(audio, envelope)
 
         return output

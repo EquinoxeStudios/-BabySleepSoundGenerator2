@@ -5,6 +5,7 @@ Moro reflex prevention and other reflex-related effects.
 import numpy as np
 from models.parameters import MoroReflexPrevention
 from models.constants import Constants
+from utils.perlin_utils import apply_modulation
 
 
 class ReflexPreventer:

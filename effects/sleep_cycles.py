@@ -5,10 +5,7 @@ Sleep cycle modulation effects.
 import numpy as np
 from models.parameters import SleepCycleModulation
 from utils.optional_imports import HAS_PERLIN
-
-# Import optional libraries
-if HAS_PERLIN:
-    import noise
+from utils.perlin_utils import generate_perlin_noise, apply_modulation
 
 
 class SleepCycleModulator:
@@ -54,7 +51,13 @@ class SleepCycleModulator:
         # Create the modulation array using sine wave or perlin noise
         if HAS_PERLIN and self.use_perlin:
             # Generate perlin noise for more natural variation
-            perlin = self._generate_perlin_noise(samples / self.sample_rate, octaves=1, persistence=0.5)
+            duration_seconds = samples / self.sample_rate
+            perlin = generate_perlin_noise(
+                self.sample_rate, 
+                duration_seconds, 
+                octaves=1, 
+                persistence=0.5
+            )
 
             # Stretch to desired cycle length
             cycle_points = int(samples / cycle_samples) + 1
@@ -76,52 +79,6 @@ class SleepCycleModulator:
             modulation = 1.0 + 0.1 * np.sin(2 * np.pi * cycle_freq * t)  # 10% modulation
 
         # Apply modulation efficiently
-        if is_stereo:
-            output = audio * modulation[:, np.newaxis]
-        else:
-            output = audio * modulation
+        output = apply_modulation(audio, modulation)
 
         return output
-        
-    def _generate_perlin_noise(
-        self, duration_seconds: int, octaves: int = 4, persistence: float = 0.5
-    ) -> np.ndarray:
-        """
-        Generate organic noise using Perlin/Simplex noise algorithm.
-        This creates more natural textures than basic random noise.
-
-        Args:
-            duration_seconds: Length of the audio in seconds
-            octaves: Number of layers of detail
-            persistence: How much each octave contributes to the overall shape
-
-        Returns:
-            Numpy array of noise with natural patterns
-        """
-        if not HAS_PERLIN:
-            # Fall back to regular noise if library not available
-            return np.random.normal(0, 0.5, int(duration_seconds * self.sample_rate))
-
-        samples = int(duration_seconds * self.sample_rate)
-        result = np.zeros(samples)
-
-        # Create seeds for each octave
-        seeds = [np.random.randint(0, 1000) for _ in range(octaves)]
-
-        # Parameter determines how "organic" the noise feels
-        scale_factor = 0.002  # Controls the "speed" of changes
-
-        # Standard implementation
-        for i in range(samples):
-            value = 0
-            for j in range(octaves):
-                # Each octave uses a different seed and scale
-                octave_scale = scale_factor * (2**j)
-                value += persistence**j * noise.pnoise1(i * octave_scale, base=seeds[j])
-
-            result[i] = value
-
-        # Normalize to +/- 0.5 range
-        result = 0.5 * result / np.max(np.abs(result))
-
-        return result.astype(np.float32)
