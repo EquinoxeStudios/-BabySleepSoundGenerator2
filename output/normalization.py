@@ -43,16 +43,10 @@ class LoudnessNormalizer:
         if not HAS_LOUDNORM:
             # If pyloudnorm is not available, apply simple peak normalization
             logger.info("pyloudnorm not available, using peak normalization instead")
-            max_val = np.max(np.abs(audio))
-            if max_val > 0:
-                return audio / max_val * 0.9
-            return audio
+            return self._apply_peak_normalization(audio)
 
         try:
-            # Create meter
-            meter = pyln.Meter(self.sample_rate)
-
-            # Check the shape of the audio input
+            # Check the audio shape first before creating the meter
             logger.debug(f"Audio shape before normalization: {audio.shape}")
             
             # Handle multi-channel audio - ensure we only have 1 or 2 channels
@@ -62,31 +56,62 @@ class LoudnessNormalizer:
                     logger.warning(f"Audio has {channels} channels, restricting to stereo")
                     audio = audio[:, :2]
             
+            # Check the shape again
+            audio_shape = audio.shape
+            
+            # Pre-emptively check for conditions that will cause the five-channel error
+            # and use peak normalization instead
+            if len(audio_shape) > 1 and audio_shape[1] > 2:
+                logger.warning(f"Audio has unexpected shape {audio_shape}, using peak normalization")
+                return self._apply_peak_normalization(audio)
+
+            # Check for problematic audio values before processing
+            if np.isnan(audio).any() or np.isinf(audio).any():
+                logger.warning("Audio contains NaN or Inf values, using peak normalization")
+                # Clean the values first
+                audio = np.nan_to_num(audio, nan=0.0, posinf=0.95, neginf=-0.95)
+                return self._apply_peak_normalization(audio)
+                
+            # Create meter
+            meter = pyln.Meter(self.sample_rate)
+
             # Ensure audio is properly structured for pyloudnorm
             # pyloudnorm expects (samples, channels) for stereo, and 1D array for mono
             if len(audio.shape) == 1:
                 # Mono audio - already in the right format
-                current_loudness = meter.integrated_loudness(audio)
+                try:
+                    current_loudness = meter.integrated_loudness(audio)
+                except Exception as e:
+                    logger.warning(f"Error measuring loudness for mono audio: {e}")
+                    return self._apply_peak_normalization(audio)
             else:
                 # Stereo or multi-channel - need to transpose for pyloudnorm
-                # Fix: Check if it's already a 2D array before transposing
-                if len(audio.shape) == 2:
+                try:
                     if audio.shape[1] == 1:  # Mono in 2D form
-                        audio_for_meter = audio.flatten()
-                    else:  # Stereo or more
-                        audio_for_meter = audio.T
-                    current_loudness = meter.integrated_loudness(audio_for_meter)
-                else:
-                    # Unexpected format - fallback to peak normalization
-                    logger.warning(f"Unexpected audio format with shape {audio.shape}, using peak normalization")
-                    max_val = np.max(np.abs(audio))
-                    if max_val > 0:
-                        return audio / max_val * 0.9
-                    return audio
+                        current_loudness = meter.integrated_loudness(audio.flatten())
+                    elif audio.shape[1] == 2:  # Stereo
+                        current_loudness = meter.integrated_loudness(audio.T)
+                    else:
+                        # More than 2 channels - fall back to peak normalization
+                        logger.warning(f"Audio has {audio.shape[1]} channels, using peak normalization")
+                        return self._apply_peak_normalization(audio)
+                except Exception as e:
+                    logger.warning(f"Error measuring loudness: {e}")
+                    return self._apply_peak_normalization(audio)
+
+            # Check if we got a valid loudness measurement
+            if current_loudness is None or np.isnan(current_loudness) or np.isinf(current_loudness):
+                logger.warning("Invalid loudness measurement, using peak normalization")
+                return self._apply_peak_normalization(audio)
 
             # Calculate gain needed to reach target loudness
             logger.debug(f"Current loudness: {current_loudness} LUFS, Target: {self.target_loudness} LUFS")
             gain_db = self.target_loudness - current_loudness
+
+            # Check for extreme gain values
+            if abs(gain_db) > 40:  # If gain adjustment is extreme
+                logger.warning(f"Extreme gain adjustment required ({gain_db:.1f} dB), using peak normalization instead")
+                return self._apply_peak_normalization(audio)
 
             # Loudness normalization is a simple gain adjustment (in dB)
             gain_linear = 10 ** (gain_db / 20.0)
@@ -101,17 +126,42 @@ class LoudnessNormalizer:
                 logger.debug(f"Applying peak limiting (max value: {max_val:.4f})")
                 normalized_audio = normalized_audio / max_val * 0.98
                 
-                # Apply a simple safety margin instead of true peak measurement
-                # Skip the problematic true peak measurement that causes the 5-channel error
-                normalized_audio = normalized_audio * 0.95  # Additional 5% safety margin
+            # Apply a simple safety margin to avoid potential clipping
+            normalized_audio = normalized_audio * 0.95  # 5% safety margin
 
             return normalized_audio
             
         except Exception as e:
-            logger.error(f"Error in loudness normalization: {e}")
-            # Fall back to peak normalization in case of any errors
-            logger.warning("Falling back to peak normalization")
+            logger.warning(f"Error in loudness normalization: {e}, using peak normalization")
+            return self._apply_peak_normalization(audio)
+    
+    def _apply_peak_normalization(self, audio: np.ndarray, target_peak: float = 0.9) -> np.ndarray:
+        """
+        Apply simple peak normalization as a fallback method.
+        
+        Args:
+            audio: Input audio array
+            target_peak: Target peak level (0.0-1.0)
+            
+        Returns:
+            Peak-normalized audio
+        """
+        try:
+            # Clean up any NaN or Inf values first
+            if np.isnan(audio).any() or np.isinf(audio).any():
+                logger.debug("Cleaning NaN/Inf values before peak normalization")
+                audio = np.nan_to_num(audio, nan=0.0, posinf=0.95, neginf=-0.95)
+            
+            # Find the peak value
             max_val = np.max(np.abs(audio))
+            
             if max_val > 0:
-                return audio / max_val * 0.9
+                # Normalize to target peak
+                return audio / max_val * target_peak
+            else:
+                # If audio is silent, return as is
+                return audio
+        except Exception as e:
+            logger.error(f"Error in peak normalization: {e}")
+            # Return original audio if everything fails
             return audio
