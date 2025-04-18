@@ -29,6 +29,10 @@ class Constants:
     DEFAULT_CROSSFADE_DURATION = 15.0  # seconds
     BREATHING_RATE_CPM = 12.0  # cycles per minute
     DEFAULT_HEARTBEAT_BPM = 70.0
+    
+    # Looping parameters - added these new constants
+    LOOP_SEARCH_START_PERCENTAGE = 0.7  # Start searching at 70% of the file
+    LOOP_SEARCH_STEP_DIVIDER = 20  # Search step size divisor
 
 
 class HeartbeatConstants:

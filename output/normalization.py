@@ -46,12 +46,17 @@ class LoudnessNormalizer:
         # Create meter
         meter = pyln.Meter(self.sample_rate)
 
+        # Handle multi-channel audio - ensure we only have 1 or 2 channels
+        if len(audio.shape) > 1 and audio.shape[1] > 2:
+            # Keep only the first two channels if there are more
+            audio = audio[:, :2]
+            
         # Measure current loudness
         if len(audio.shape) == 1:
             # Mono
             current_loudness = meter.integrated_loudness(audio)
         else:
-            # Stereo
+            # Stereo or reduced multi-channel
             current_loudness = meter.integrated_loudness(audio.T)
 
         # Calculate gain needed to reach target loudness
@@ -73,10 +78,14 @@ class LoudnessNormalizer:
             if len(audio.shape) == 1:
                 true_peak = meter.true_peak(normalized_audio)
             else:
-                true_peak = max(
-                    meter.true_peak(normalized_audio[:, 0]),
-                    meter.true_peak(normalized_audio[:, 1]),
-                )
+                # Ensure we only process the first two channels
+                if normalized_audio.shape[1] >= 2:
+                    true_peak = max(
+                        meter.true_peak(normalized_audio[:, 0]),
+                        meter.true_peak(normalized_audio[:, 1]),
+                    )
+                else:
+                    true_peak = meter.true_peak(normalized_audio[:, 0])
 
             if true_peak > -1.0:  # -1 dBTP limit per EBU R128
                 normalized_audio = normalized_audio / (10 ** (true_peak / 20)) * 0.891  # -1 dBTP

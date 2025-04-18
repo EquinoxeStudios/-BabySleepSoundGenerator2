@@ -131,7 +131,7 @@ class FrequencyProcessor:
                     high_freq_reduction_db = circadian.high_freq_reduction_db
 
                     # Create a custom filter that gradually reduces high frequencies
-                    freqs = [0, 1000, 2000, 4000, 8000, 16000, self.sample_rate // 2]
+                    freqs = [0, 1000, 2000, 4000, 8000, 16000, self.sample_rate / 2]  # Fixed: changed // to /
 
                     # Convert dB reduction to linear scale (gradually increasing reduction)
                     reduction_factor = 10 ** (-high_freq_reduction_db / 20.0)
@@ -170,7 +170,7 @@ class FrequencyProcessor:
             elif focus == FrequencyFocus.LOW_MID:
                 # Focus on low and mid frequencies with more refined curve
                 # Create a custom filter with a smoother response curve
-                freqs = [0, 200, 400, 800, 1600, 2400, 3200, 5000, 8000, self.sample_rate // 2]
+                freqs = [0, 200, 400, 800, 1600, 2400, 3200, 5000, 8000, self.sample_rate / 2]  # Fixed: changed to /
                 gains = [0.6, 1.0, 1.2, 1.0, 0.8, 0.5, 0.3, 0.2, 0.1, 0.1]
 
                 # Normalize frequencies to Nyquist
@@ -200,7 +200,7 @@ class FrequencyProcessor:
             elif focus == FrequencyFocus.MID_HIGH:
                 # Focus on mid to high frequencies with better high-end extension
                 # Create a custom filter with more precise high-frequency response
-                freqs = [0, 500, 1000, 2000, 4000, 6000, 8000, 12000, self.sample_rate // 2]
+                freqs = [0, 500, 1000, 2000, 4000, 6000, 8000, 12000, self.sample_rate / 2]  # Fixed: changed // to /
                 gains = [0.1, 0.3, 0.8, 1.2, 1.0, 0.9, 0.7, 0.5, 0.3]
 
                 # Normalize frequencies to Nyquist
@@ -213,7 +213,7 @@ class FrequencyProcessor:
             elif focus == FrequencyFocus.BALANCED:
                 # Balanced frequency response with more natural curve
                 # Create a custom filter that mimics pleasant "hi-fi" response
-                freqs = [0, 30, 80, 200, 500, 1000, 2000, 4000, 8000, 12000, self.sample_rate // 2]
+                freqs = [0, 30, 80, 200, 500, 1000, 2000, 4000, 8000, 12000, self.sample_rate / 2]  # Fixed: changed // to /
                 gains = [0.5, 0.8, 1.0, 1.1, 1.0, 0.95, 1.0, 1.05, 0.9, 0.7, 0.5]
 
                 # Normalize frequencies to Nyquist

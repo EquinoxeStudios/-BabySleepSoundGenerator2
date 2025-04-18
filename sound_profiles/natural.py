@@ -142,9 +142,11 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                     indices = np.clip(indices.astype(int), 0, len(bpm_noise) - 1)
                     bpm_variations = bpm_noise[indices]
                     
-                    # Interpolate to full length
+                    # Interpolate to full length - FIXED: Use arrays of same length
                     full_indices = np.linspace(0, len(bpm_variations) - 1, int(duration_seconds) + 1)
-                    bpm_variations = np.interp(full_indices, np.arange(len(bpm_variations)), bpm_variations)
+                    index_array = np.arange(len(bpm_variations))
+                    if len(index_array) > 0:
+                        bpm_variations = np.interp(full_indices, index_array, bpm_variations)
                     
                     # Scale to desired BPM range
                     min_bpm, max_bpm = bpm_range
@@ -174,8 +176,11 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 beat_index = 0
 
                 while current_time < duration_seconds:
-                    # Get BPM at this time point
-                    current_bpm = np.interp(current_time, t, bpm_variations)
+                    # Get BPM at this time point - FIXED: Make sure arrays used in np.interp have the same length
+                    # Create t_values appropriate for the length of bpm_variations
+                    t_values = np.linspace(0, duration_seconds, len(bpm_variations))
+                    current_bpm = np.interp(current_time, t_values, bpm_variations)
+                    
                     # Convert to period (seconds per beat)
                     instantaneous_period = 60 / current_bpm
                     # Next beat time

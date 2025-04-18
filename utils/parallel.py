@@ -3,6 +3,7 @@ Parallel processing utilities for efficient computation.
 """
 
 import concurrent.futures
+import multiprocessing  # Added this import for cpu_count
 import logging
 import time
 from typing import List, Callable, Any, Dict, Tuple, Optional
@@ -48,7 +49,7 @@ class ParallelProcessor:
         
         # Calculate max workers - default is min(tasks, CPU count x 5 for threads, CPU count for processes)
         cpu_multiplier = 5 if use_threads else 1
-        workers = self.max_workers or min(num_tasks, concurrent.futures.cpu_count() * cpu_multiplier)
+        workers = self.max_workers or min(num_tasks, multiprocessing.cpu_count() * cpu_multiplier)  # Fixed this line
         
         logger.info(f"Starting {num_tasks} parallel tasks using {workers} workers ({description})")
         start_time = time.time()

@@ -158,8 +158,8 @@ class BabySleepSoundGenerator:
             )
             
             # Initialize effect modules
-            self.breathing_modulator = BreathingModulator(sample_rate, use_perlin)
-            self.sleep_cycle_modulator = SleepCycleModulator(sample_rate, use_perlin)
+            self.breathing_modulator = BreathingModulator(sample_rate, self.use_perlin)
+            self.sleep_cycle_modulator = SleepCycleModulator(sample_rate, self.use_perlin)
             self.dynamic_volume_processor = DynamicVolumeProcessor(sample_rate, self.volume_to_db_spl)
             self.reflex_preventer = ReflexPreventer(sample_rate)
             
