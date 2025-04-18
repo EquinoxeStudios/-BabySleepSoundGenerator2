@@ -1,9 +1,9 @@
 """
-Breathing modulation effects.
+Sleep cycle modulation effects.
 """
 
 import numpy as np
-from models.parameters import BreathingModulation
+from models.parameters import SleepCycleModulation
 from utils.optional_imports import HAS_PERLIN
 
 # Import optional libraries
@@ -11,12 +11,12 @@ if HAS_PERLIN:
     import noise
 
 
-class BreathingModulator:
-    """Applies breathing rhythm modulation to audio."""
+class SleepCycleModulator:
+    """Applies sleep cycle modulation to audio."""
     
     def __init__(self, sample_rate: int, use_perlin: bool = True):
         """
-        Initialize the breathing modulator.
+        Initialize the sleep cycle modulator.
         
         Args:
             sample_rate: Audio sample rate
@@ -25,15 +25,15 @@ class BreathingModulator:
         self.sample_rate = sample_rate
         self.use_perlin = use_perlin and HAS_PERLIN
         
-    def apply_breathing_modulation(
-        self, audio: np.ndarray, params: BreathingModulation
+    def apply_sleep_cycle_modulation(
+        self, audio: np.ndarray, params: SleepCycleModulation
     ) -> np.ndarray:
         """
-        Apply subtle modulation matching maternal breathing rhythm.
+        Apply cyclical intensity modulation to align with infant sleep cycles.
 
         Args:
             audio: Input audio array
-            params: Parameters for breathing modulation
+            params: Parameters for sleep cycle modulation
 
         Returns:
             Modulated audio
@@ -42,52 +42,38 @@ class BreathingModulator:
             return audio
 
         # Extract parameters
-        cpm = params.cycles_per_minute
+        cycle_minutes = params.cycle_minutes
 
-        # Convert to Hz
-        breathing_freq = cpm / 60.0
-
-        # Generate the modulation envelope
+        # Create modulation signal
         samples = len(audio)
         is_stereo = len(audio.shape) > 1
 
-        # Time points
-        t = np.arange(samples) / self.sample_rate
+        # Convert cycle duration to samples
+        cycle_samples = int(cycle_minutes * 60 * self.sample_rate)
 
+        # Create the modulation array using sine wave or perlin noise
         if HAS_PERLIN and self.use_perlin:
-            # Generate perlin noise sampled at breathing frequency
-            # for more natural, organic variations
-            perlin = self._generate_perlin_noise(
-                samples / self.sample_rate / 5, octaves=1, persistence=0.5
-            )
+            # Generate perlin noise for more natural variation
+            perlin = self._generate_perlin_noise(samples / self.sample_rate, octaves=1, persistence=0.5)
 
-            # Create breathing cycles with slight organic variation
-            n_cycles = int(samples / self.sample_rate * breathing_freq) + 1
-            indices = np.linspace(0, len(perlin) - 1, n_cycles * 10)
+            # Stretch to desired cycle length
+            cycle_points = int(samples / cycle_samples) + 1
+            indices = np.linspace(0, len(perlin) - 1, cycle_points)
             indices = np.clip(indices.astype(int), 0, len(perlin) - 1)
-            cycle_variation = perlin[indices] * 0.1  # 10% variation
+            cycle_curve = perlin[indices]
 
-            # Create breathing pattern with base frequency + variation
-            breathing = np.sin(2 * np.pi * breathing_freq * t)
+            # Interpolate to full length
+            x_points = np.linspace(0, cycle_points, len(cycle_curve))
+            x_interp = np.linspace(0, cycle_points, samples)
+            modulation = np.interp(x_interp, x_points, cycle_curve)
 
-            # Apply variations by warping the time dimension slightly
-            warped_breathing = np.zeros_like(breathing)
-            warp_amount = 0.1  # 10% time warping at most
-
-            # Create warped time vector
-            warped_t = t.copy()
-            warp_freq = breathing_freq / 5  # Slower variation
-            warp = warp_amount * np.sin(2 * np.pi * warp_freq * t)
-            warped_t += warp
-
-            # Sample breathing pattern at warped time points
-            breathing_cycle = np.sin(2 * np.pi * breathing_freq * warped_t)
-
-            # Scale to subtle modulation range (5% intensity variation)
-            modulation = 1.0 + 0.05 * breathing_cycle
+            # Scale to desired range (0.85 to 1.15) - subtle 15% modulation
+            modulation = 1.0 + 0.15 * modulation
         else:
-            # Simple sinusoidal modulation if Perlin not available
-            modulation = 1.0 + 0.05 * np.sin(2 * np.pi * breathing_freq * t)
+            # Use smooth sine wave as fallback
+            cycle_freq = 1 / (cycle_minutes * 60)  # Hz
+            t = np.arange(samples) / self.sample_rate
+            modulation = 1.0 + 0.1 * np.sin(2 * np.pi * cycle_freq * t)  # 10% modulation
 
         # Apply modulation efficiently
         if is_stereo:
