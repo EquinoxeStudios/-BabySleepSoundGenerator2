@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any, Union
 from sound_profiles.base import SoundProfileGenerator
 from utils.optional_imports import HAS_PERLIN
 # Import from utils instead of direct import
-from utils import generate_perlin_noise, apply_modulation, generate_dynamic_modulation
+from utils.perlin_utils import generate_perlin_noise, apply_modulation, generate_dynamic_modulation
 from utils.random_state import RandomStateManager
 from models.constants import PerformanceConstants, Constants
 

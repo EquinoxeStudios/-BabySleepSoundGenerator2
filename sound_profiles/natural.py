@@ -11,7 +11,7 @@ from sound_profiles.base import SoundProfileGenerator
 from models.parameters import HeartbeatParameters, DynamicShushing, ParentalVoice
 from utils.optional_imports import HAS_PERLIN
 # Import from utils instead of direct import
-from utils import generate_perlin_noise, apply_modulation
+from utils.perlin_utils import generate_perlin_noise, apply_modulation
 from utils.random_state import RandomStateManager
 from models.constants import (
     HeartbeatConstants, ShushingConstants, FanConstants, 
