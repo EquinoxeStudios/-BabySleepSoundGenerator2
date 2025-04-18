@@ -10,6 +10,8 @@ from sound_profiles.base import SoundProfileGenerator
 from utils.optional_imports import HAS_PERLIN
 # Direct import from perlin_utils instead of through utils.__init__
 from utils.perlin_utils import generate_perlin_noise, apply_modulation, generate_dynamic_modulation
+from utils.random_state import RandomStateManager
+from models.constants import PerformanceConstants
 
 logger = logging.getLogger("BabySleepSoundGenerator")
 
@@ -17,7 +19,7 @@ logger = logging.getLogger("BabySleepSoundGenerator")
 class NoiseGenerator(SoundProfileGenerator):
     """Generator for different colors of noise."""
     
-    def __init__(self, sample_rate: int, use_perlin: bool = True, modulation_depth: float = 0.08):
+    def __init__(self, sample_rate: int, use_perlin: bool = True, modulation_depth: float = 0.08, seed: int = None):
         """
         Initialize the noise generator.
         
@@ -25,9 +27,11 @@ class NoiseGenerator(SoundProfileGenerator):
             sample_rate: Audio sample rate
             use_perlin: Whether to use Perlin noise for more natural variations
             modulation_depth: Depth of modulation for dynamic variation
+            seed: Random seed for reproducibility
         """
         super().__init__(sample_rate, use_perlin)
         self.modulation_depth = modulation_depth
+        self.random_state = RandomStateManager.get_instance(seed)
         
     def generate(self, duration_seconds: int, sound_type: str = "white", **kwargs) -> np.ndarray:
         """
@@ -69,7 +73,8 @@ class NoiseGenerator(SoundProfileGenerator):
             self.sample_rate,
             duration_seconds,
             depth=self.modulation_depth,
-            use_perlin=self.use_perlin
+            use_perlin=self.use_perlin,
+            seed=self.random_state.seed
         )
 
         # Apply the modulation efficiently
@@ -96,13 +101,18 @@ class NoiseGenerator(SoundProfileGenerator):
         """
         samples = int(duration_seconds * self.sample_rate)
 
+        # For very long durations, process in chunks
+        if samples > PerformanceConstants.MAX_DURATION_SECONDS_BEFORE_CHUNKING * self.sample_rate:
+            return self._generate_white_noise_chunked(duration_seconds, **kwargs)
+
         if self.use_perlin and HAS_PERLIN:
             # Use Perlin noise for a more organic texture
             noise_array = generate_perlin_noise(
                 self.sample_rate, 
                 duration_seconds, 
                 octaves=6, 
-                persistence=0.7
+                persistence=0.7,
+                seed=self.random_state.seed
             )
 
             # Apply whitening filter to ensure flat spectrum using FFT
@@ -116,12 +126,65 @@ class NoiseGenerator(SoundProfileGenerator):
             noise_array = 0.5 * noise_array / np.max(np.abs(noise_array))
         else:
             # Traditional white noise generation
-            noise_array = np.random.normal(0, 0.5, samples)
+            noise_array = self.random_state.normal(0, 0.5, samples)
 
         # Apply subtle dynamic modulation to prevent fatigue
         noise_array = self._apply_dynamic_modulation(noise_array)
 
         return noise_array
+
+    def _generate_white_noise_chunked(self, duration_seconds: int, **kwargs) -> np.ndarray:
+        """Generate white noise in chunks for very long durations."""
+        # Calculate total samples
+        total_samples = int(duration_seconds * self.sample_rate)
+        
+        # Process in chunks
+        chunk_seconds = PerformanceConstants.FFT_CHUNK_SIZE_SECONDS
+        chunk_samples = int(chunk_seconds * self.sample_rate)
+        crossfade_samples = int(PerformanceConstants.CROSSFADE_BETWEEN_CHUNKS_SECONDS * self.sample_rate)
+        
+        # Calculate number of chunks
+        num_chunks = (total_samples + chunk_samples - 1) // chunk_samples
+        
+        # Create result array
+        result = np.zeros(total_samples)
+        
+        logger.info(f"Generating white noise in {num_chunks} chunks of {chunk_seconds}s each")
+        
+        # Process each chunk
+        for i in range(num_chunks):
+            # Calculate chunk boundaries with overlap for crossfade
+            start_idx = i * chunk_samples
+            end_idx = min(start_idx + chunk_samples + crossfade_samples, total_samples)
+            chunk_duration = (end_idx - start_idx) / self.sample_rate
+            
+            # Generate this chunk
+            chunk = self.generate_white_noise(chunk_duration)
+            
+            # Apply crossfade if not the first chunk
+            if i > 0:
+                # Overlap with previous chunk
+                overlap_start = start_idx
+                overlap_end = min(start_idx + crossfade_samples, total_samples)
+                
+                # Create crossfade weights
+                fade_in = np.linspace(0, 1, overlap_end - overlap_start)
+                fade_out = 1 - fade_in
+                
+                # Apply crossfade
+                result[overlap_start:overlap_end] = (
+                    result[overlap_start:overlap_end] * fade_out + 
+                    chunk[:overlap_end - overlap_start] * fade_in
+                )
+                
+                # Add the non-overlapping part
+                if overlap_end < end_idx:
+                    result[overlap_end:end_idx] = chunk[overlap_end - overlap_start:end_idx - overlap_start]
+            else:
+                # First chunk, no crossfade needed
+                result[start_idx:end_idx] = chunk[:end_idx - start_idx]
+        
+        return result
 
     def generate_pink_noise_fft(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
@@ -136,6 +199,10 @@ class NoiseGenerator(SoundProfileGenerator):
             Pink noise array
         """
         samples = int(duration_seconds * self.sample_rate)
+        
+        # For very long durations, process in chunks
+        if samples > PerformanceConstants.MAX_DURATION_SECONDS_BEFORE_CHUNKING * self.sample_rate:
+            return self._generate_noise_fft_chunked(duration_seconds, noise_type="pink", **kwargs)
 
         # Start with white noise
         if self.use_perlin and HAS_PERLIN:
@@ -143,10 +210,11 @@ class NoiseGenerator(SoundProfileGenerator):
                 self.sample_rate, 
                 duration_seconds, 
                 octaves=6, 
-                persistence=0.7
+                persistence=0.7,
+                seed=self.random_state.seed
             )
         else:
-            white = np.random.normal(0, 0.5, samples)
+            white = self.random_state.normal(0, 0.5, samples)
 
         # FFT to frequency domain
         X = np.fft.rfft(white)
@@ -187,6 +255,10 @@ class NoiseGenerator(SoundProfileGenerator):
             Brown noise array
         """
         samples = int(duration_seconds * self.sample_rate)
+        
+        # For very long durations, process in chunks
+        if samples > PerformanceConstants.MAX_DURATION_SECONDS_BEFORE_CHUNKING * self.sample_rate:
+            return self._generate_noise_fft_chunked(duration_seconds, noise_type="brown", **kwargs)
 
         # Start with white noise
         if self.use_perlin and HAS_PERLIN:
@@ -194,10 +266,11 @@ class NoiseGenerator(SoundProfileGenerator):
                 self.sample_rate, 
                 duration_seconds, 
                 octaves=6, 
-                persistence=0.7
+                persistence=0.7,
+                seed=self.random_state.seed
             )
         else:
-            white = np.random.normal(0, 0.5, samples)
+            white = self.random_state.normal(0, 0.5, samples)
 
         # FFT to frequency domain
         X = np.fft.rfft(white)
@@ -224,3 +297,61 @@ class NoiseGenerator(SoundProfileGenerator):
         brown_noise = self._apply_dynamic_modulation(brown_noise)
 
         return brown_noise
+        
+    def _generate_noise_fft_chunked(self, duration_seconds: int, noise_type: str, **kwargs) -> np.ndarray:
+        """Generate colored noise in chunks for very long durations."""
+        # Calculate total samples
+        total_samples = int(duration_seconds * self.sample_rate)
+        
+        # Process in chunks
+        chunk_seconds = PerformanceConstants.FFT_CHUNK_SIZE_SECONDS
+        chunk_samples = int(chunk_seconds * self.sample_rate)
+        crossfade_samples = int(PerformanceConstants.CROSSFADE_BETWEEN_CHUNKS_SECONDS * self.sample_rate)
+        
+        # Calculate number of chunks
+        num_chunks = (total_samples + chunk_samples - 1) // chunk_samples
+        
+        # Create result array
+        result = np.zeros(total_samples)
+        
+        logger.info(f"Generating {noise_type} noise in {num_chunks} chunks of {chunk_seconds}s each")
+        
+        # Process each chunk
+        for i in range(num_chunks):
+            # Calculate chunk boundaries with overlap for crossfade
+            start_idx = i * chunk_samples
+            end_idx = min(start_idx + chunk_samples + crossfade_samples, total_samples)
+            chunk_duration = (end_idx - start_idx) / self.sample_rate
+            
+            # Generate this chunk based on noise type
+            if noise_type == "pink":
+                chunk = self.generate_pink_noise_fft(chunk_duration)
+            elif noise_type == "brown":
+                chunk = self.generate_brown_noise_fft(chunk_duration)
+            else:
+                chunk = self.generate_white_noise(chunk_duration)
+            
+            # Apply crossfade if not the first chunk
+            if i > 0:
+                # Overlap with previous chunk
+                overlap_start = start_idx
+                overlap_end = min(start_idx + crossfade_samples, total_samples)
+                
+                # Create crossfade weights
+                fade_in = np.linspace(0, 1, overlap_end - overlap_start)
+                fade_out = 1 - fade_in
+                
+                # Apply crossfade
+                result[overlap_start:overlap_end] = (
+                    result[overlap_start:overlap_end] * fade_out + 
+                    chunk[:overlap_end - overlap_start] * fade_in
+                )
+                
+                # Add the non-overlapping part
+                if overlap_end < end_idx:
+                    result[overlap_end:end_idx] = chunk[overlap_end - overlap_start:end_idx - overlap_start]
+            else:
+                # First chunk, no crossfade needed
+                result[start_idx:end_idx] = chunk[:end_idx - start_idx]
+        
+        return result

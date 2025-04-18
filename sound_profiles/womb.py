@@ -2,7 +2,6 @@
 Womb-related sound generators like womb sounds and umbilical swish.
 """
 
-import random
 import numpy as np
 from scipy import signal
 import logging
@@ -11,6 +10,8 @@ from sound_profiles.base import SoundProfileGenerator
 from utils.optional_imports import HAS_PERLIN
 # Direct import from perlin_utils instead of through utils.__init__
 from utils.perlin_utils import generate_perlin_noise, apply_modulation
+from utils.random_state import RandomStateManager
+from models.constants import WombConstants, UmbilicalConstants
 
 logger = logging.getLogger("BabySleepSoundGenerator")
 
@@ -18,15 +19,17 @@ logger = logging.getLogger("BabySleepSoundGenerator")
 class WombSoundGenerator(SoundProfileGenerator):
     """Generator for womb-related sounds like womb ambience and umbilical swish."""
     
-    def __init__(self, sample_rate: int, use_perlin: bool = True):
+    def __init__(self, sample_rate: int, use_perlin: bool = True, seed: int = None):
         """
         Initialize the womb sound generator.
         
         Args:
             sample_rate: Audio sample rate
             use_perlin: Whether to use Perlin noise for more natural variations
+            seed: Random seed for reproducibility
         """
-        super().__init__(sample_rate, use_perlin)
+        super().__init__(sample_rate, use_perlin, seed)
+        self.random_state = RandomStateManager.get_instance(seed)
 
     def generate(self, duration_seconds: int, sound_type: str = "womb", **kwargs) -> np.ndarray:
         """
@@ -61,7 +64,7 @@ class WombSoundGenerator(SoundProfileGenerator):
 
         # Generate base brown noise
         # Simple method for brown noise using integration of white noise
-        white_noise = np.random.normal(0, 1, samples)
+        white_noise = self.random_state.normal(0, 1, samples)
         brown_noise = np.cumsum(white_noise)
         
         # High pass filter to avoid DC build-up
@@ -82,44 +85,46 @@ class WombSoundGenerator(SoundProfileGenerator):
                 self.sample_rate, 
                 duration_seconds, 
                 octaves=1, 
-                persistence=0.5
+                persistence=0.5,
+                seed=self.random_state.seed
             )
             
             # Scale to appropriate breathing rate (12-20 breaths per minute)
-            breathing_scale = 16 / 60  # breaths per second
+            breathing_scale = WombConstants.BREATHING_RATE_BREATHS_PER_MIN / 60  # breaths per second
             indices = np.linspace(0, len(breathing_noise) // 40, samples)
             indices = np.clip(indices.astype(int), 0, len(breathing_noise) - 1)
-            breathing_modulation = 0.15 * breathing_noise[indices]
+            breathing_modulation = WombConstants.BREATHING_MODULATION_DEPTH * breathing_noise[indices]
 
             # Add a secondary slower modulation for deeper bodily rhythms
             deep_rhythm_noise = generate_perlin_noise(
                 self.sample_rate, 
                 duration_seconds, 
                 octaves=1, 
-                persistence=0.5
+                persistence=0.5,
+                seed=self.random_state.seed + 1 if self.random_state.seed else None
             )
             deep_indices = np.linspace(0, len(deep_rhythm_noise) // 200, samples)
             deep_indices = np.clip(deep_indices.astype(int), 0, len(deep_rhythm_noise) - 1)
-            deep_modulation = 0.1 * deep_rhythm_noise[deep_indices]
+            deep_modulation = WombConstants.DEEP_RHYTHM_MODULATION_DEPTH * deep_rhythm_noise[deep_indices]
 
             # Combine modulations
             combined_modulation = breathing_modulation + deep_modulation
         else:
             # Fallback to sine-based modulation
             # Slow rhythm for maternal breathing (about 12-20 breaths per minute)
-            breathing_rate = 16 / 60  # breaths per second
-            breathing_modulation = 0.15 * np.sin(2 * np.pi * breathing_rate * t)
+            breathing_rate = WombConstants.BREATHING_RATE_BREATHS_PER_MIN / 60  # breaths per second
+            breathing_modulation = WombConstants.BREATHING_MODULATION_DEPTH * np.sin(2 * np.pi * breathing_rate * t)
             
             # Add a slower modulation for blood flow
-            blood_rate = 4 / 60  # cycles per second
-            blood_modulation = 0.1 * np.sin(2 * np.pi * blood_rate * t)
+            blood_rate = WombConstants.BLOOD_FLOW_CYCLES_PER_MIN / 60  # cycles per second
+            blood_modulation = WombConstants.DEEP_RHYTHM_MODULATION_DEPTH * np.sin(2 * np.pi * blood_rate * t)
             
             # Combine modulations
             combined_modulation = breathing_modulation + blood_modulation
 
         # Apply a low-pass filter to make it more womb-like
         # Research-backed cutoff at 1000 Hz to mimic womb frequency filtering
-        b, a = signal.butter(6, 1000 / (self.sample_rate / 2), "low")
+        b, a = signal.butter(6, WombConstants.WOMB_LOWPASS_CUTOFF_HZ / (self.sample_rate / 2), "low")
         filtered_noise = signal.lfilter(b, a, base_noise)
 
         # Combine with the modulations
@@ -128,7 +133,7 @@ class WombSoundGenerator(SoundProfileGenerator):
         # Normalize
         max_val = np.max(np.abs(womb_sound))
         if max_val > 0:
-            womb_sound = womb_sound / max_val * 0.9
+            womb_sound = womb_sound / max_val * WombConstants.DEFAULT_AMPLITUDE
 
         return womb_sound
 
@@ -147,7 +152,7 @@ class WombSoundGenerator(SoundProfileGenerator):
 
         # Start with filtered brown noise as the base
         # Simple method for brown noise
-        white_noise = np.random.normal(0, 1, samples)
+        white_noise = self.random_state.normal(0, 1, samples)
         brown_noise = np.cumsum(white_noise)
         
         # High pass filter to avoid DC build-up
@@ -157,13 +162,18 @@ class WombSoundGenerator(SoundProfileGenerator):
         # Normalize
         brown_noise = brown_noise / np.max(np.abs(brown_noise)) * 0.9
 
-        # Apply a band-pass filter to focus on 'whoosh' frequencies (50-150 Hz)
-        b, a = signal.butter(4, [50 / (self.sample_rate / 2), 150 / (self.sample_rate / 2)], "band")
+        # Apply a band-pass filter to focus on 'whoosh' frequencies
+        b, a = signal.butter(
+            4, 
+            [UmbilicalConstants.WHOOSH_BANDPASS_LOW_HZ / (self.sample_rate / 2), 
+             UmbilicalConstants.WHOOSH_BANDPASS_HIGH_HZ / (self.sample_rate / 2)], 
+            "band"
+        )
         whoosh_base = signal.lfilter(b, a, brown_noise)
 
         # Create pulsing effect synchronized with heartbeat rate (maternal ~70 bpm)
         t = np.linspace(0, duration_seconds, samples, endpoint=False)
-        pulse_rate = 70 / 60  # Convert bpm to Hz
+        pulse_rate = UmbilicalConstants.PULSE_RATE_BPM / 60  # Convert bpm to Hz
 
         if HAS_PERLIN and self.use_perlin:
             # Use perlin noise for organic, natural pulse variations
@@ -171,19 +181,24 @@ class WombSoundGenerator(SoundProfileGenerator):
                 self.sample_rate, 
                 duration_seconds / 2, 
                 octaves=2, 
-                persistence=0.5
+                persistence=0.5,
+                seed=self.random_state.seed
             )
             
             # Map to reasonable range and stretch
             indices = np.linspace(0, len(pulse_noise) - 1, samples)
             indices = np.clip(indices.astype(int), 0, len(pulse_noise) - 1)
-            pulse_factor = 0.5 + 0.5 * (pulse_noise[indices] * 0.5 + 0.5)  # Map to 0.25-0.75 range
+            base = UmbilicalConstants.PULSE_FACTOR_BASE
+            variation = UmbilicalConstants.PULSE_FACTOR_VARIATION
+            pulse_factor = base + variation * (0.5 + 0.5 * pulse_noise[indices])
         else:
             # Use modified sine for the pulse
-            pulse_factor = 0.5 + 0.25 * np.sin(2 * np.pi * pulse_rate * t)
+            base = UmbilicalConstants.PULSE_FACTOR_BASE
+            variation = UmbilicalConstants.PULSE_FACTOR_VARIATION
+            pulse_factor = base + variation * np.sin(2 * np.pi * pulse_rate * t)
             
             # Add a small random variation
-            small_variation = 0.1 * np.random.randn(len(pulse_factor))
+            small_variation = 0.1 * self.random_state.randn(len(pulse_factor))
             
             # Smooth the random variations
             small_variation = np.convolve(
@@ -197,8 +212,13 @@ class WombSoundGenerator(SoundProfileGenerator):
         whoosh_pulsed = whoosh_base * pulse_factor
 
         # Add a second layer with slight frequency shift for richness
-        # Filter a different frequency band (100-250 Hz)
-        b2, a2 = signal.butter(4, [100 / (self.sample_rate / 2), 250 / (self.sample_rate / 2)], "band")
+        # Filter a different frequency band
+        b2, a2 = signal.butter(
+            4, 
+            [UmbilicalConstants.SECONDARY_BANDPASS_LOW_HZ / (self.sample_rate / 2), 
+             UmbilicalConstants.SECONDARY_BANDPASS_HIGH_HZ / (self.sample_rate / 2)], 
+            "band"
+        )
         whoosh_high = signal.lfilter(b2, a2, brown_noise)
 
         # Create a different pulse pattern, slightly offset
@@ -207,15 +227,16 @@ class WombSoundGenerator(SoundProfileGenerator):
                 self.sample_rate, 
                 duration_seconds / 2, 
                 octaves=2, 
-                persistence=0.6
+                persistence=0.6,
+                seed=self.random_state.seed + 1 if self.random_state.seed else None
             )
             indices2 = np.linspace(0, len(pulse_noise2) - 1, samples)
             indices2 = np.clip(indices2.astype(int), 0, len(pulse_noise2) - 1)
-            pulse_factor2 = 0.4 + 0.3 * (pulse_noise2[indices2] * 0.5 + 0.5)  # Different range
+            pulse_factor2 = 0.4 + 0.3 * (0.5 + 0.5 * pulse_noise2[indices2])
         else:
             # Slight phase shift for second layer
             pulse_factor2 = 0.4 + 0.3 * np.sin(2 * np.pi * pulse_rate * t + 0.5)
-            small_variation2 = 0.1 * np.random.randn(len(pulse_factor2))
+            small_variation2 = 0.1 * self.random_state.randn(len(pulse_factor2))
             small_variation2 = np.convolve(
                 small_variation2,
                 np.ones(int(0.05 * self.sample_rate)) / int(0.05 * self.sample_rate),
@@ -234,7 +255,8 @@ class WombSoundGenerator(SoundProfileGenerator):
                 self.sample_rate, 
                 duration_seconds / 10, 
                 octaves=1, 
-                persistence=0.5
+                persistence=0.5,
+                seed=self.random_state.seed + 2 if self.random_state.seed else None
             )
             indices3 = np.linspace(0, len(pressure_variation) - 1, samples)
             indices3 = np.clip(indices3.astype(int), 0, len(pressure_variation) - 1)
@@ -252,6 +274,6 @@ class WombSoundGenerator(SoundProfileGenerator):
         # Normalize
         max_val = np.max(np.abs(umbilical_sound))
         if max_val > 0:
-            umbilical_sound = umbilical_sound / max_val * 0.9
+            umbilical_sound = umbilical_sound / max_val * UmbilicalConstants.DEFAULT_AMPLITUDE
 
         return umbilical_sound

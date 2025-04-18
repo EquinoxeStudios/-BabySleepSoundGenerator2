@@ -2,7 +2,6 @@
 Natural sound generators like heartbeat, shushing, and fan sounds.
 """
 
-import random
 import numpy as np
 from scipy import signal
 import logging
@@ -12,6 +11,11 @@ from models.parameters import HeartbeatParameters, DynamicShushing, ParentalVoic
 from utils.optional_imports import HAS_PERLIN
 # Direct import from perlin_utils instead of through utils.__init__
 from utils.perlin_utils import generate_perlin_noise, apply_modulation
+from utils.random_state import RandomStateManager
+from models.constants import (
+    HeartbeatConstants, ShushingConstants, FanConstants, 
+    PerformanceConstants
+)
 
 logger = logging.getLogger("BabySleepSoundGenerator")
 
@@ -19,15 +23,17 @@ logger = logging.getLogger("BabySleepSoundGenerator")
 class NaturalSoundGenerator(SoundProfileGenerator):
     """Generator for natural sounds like heartbeats, shushing, and fan sounds."""
     
-    def __init__(self, sample_rate: int, use_perlin: bool = True):
+    def __init__(self, sample_rate: int, use_perlin: bool = True, seed: int = None):
         """
         Initialize the natural sound generator.
         
         Args:
             sample_rate: Audio sample rate
             use_perlin: Whether to use Perlin noise for more natural variations
+            seed: Random seed for reproducibility
         """
-        super().__init__(sample_rate, use_perlin)
+        super().__init__(sample_rate, use_perlin, seed)
+        self.random_state = RandomStateManager.get_instance(seed)
     
     def generate(self, duration_seconds: int, sound_type: str = "heartbeat", **kwargs) -> np.ndarray:
         """
@@ -95,7 +101,8 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                     self.sample_rate, 
                     duration_seconds / 10, 
                     octaves=1, 
-                    persistence=0.5
+                    persistence=0.5,
+                    seed=self.random_state.seed
                 )
                 
                 # Stretch the noise to match desired cycle period
@@ -155,9 +162,9 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             beat_samples = (np.arange(0, duration_seconds, beat_period) * self.sample_rate).astype(int)
 
         # Each beat consists of a "lub" and a "dub"
-        lub_duration = 0.12  # in seconds
-        dub_duration = 0.1  # in seconds
-        dub_delay = 0.2  # time after lub
+        lub_duration = HeartbeatConstants.LUB_DURATION_SECONDS
+        dub_duration = HeartbeatConstants.DUB_DURATION_SECONDS
+        dub_delay = HeartbeatConstants.DUB_DELAY_SECONDS
 
         # Add slight natural variation to heartbeat amplitude
         if HAS_PERLIN and self.use_perlin:
@@ -166,16 +173,17 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 self.sample_rate, 
                 duration_seconds / 5, 
                 octaves=1, 
-                persistence=0.5
+                persistence=0.5,
+                seed=self.random_state.seed
             )
             
             # Stretch to get only a few variations over the whole duration
             indices = np.linspace(0, len(amp_variation) - 1, len(beat_samples))
             indices = np.clip(indices.astype(int), 0, len(amp_variation) - 1)
-            amp_variations = 0.85 + 0.15 * amp_variation[indices]  # 15% variation
+            amp_variations = 0.85 + HeartbeatConstants.AMPLITUDE_VARIATION_PCT * amp_variation[indices]
         else:
             # Fallback to random variations
-            amp_variations = 0.85 + 0.15 * np.random.normal(0, 0.3, len(beat_samples))
+            amp_variations = 0.85 + HeartbeatConstants.AMPLITUDE_VARIATION_PCT * self.random_state.normal(0, 0.3, len(beat_samples))
             
             # Smooth the variations
             amp_variations = np.convolve(amp_variations, np.ones(5) / 5, mode="same")
@@ -202,7 +210,7 @@ class NaturalSoundGenerator(SoundProfileGenerator):
 
             # Create envelope and waveform
             lub_envelope = np.exp(-(t_lub**2) / (2 * lub_env_width**2))
-            lub = lub_envelope * np.sin(2 * np.pi * 60 * t_lub) * amp_factor
+            lub = lub_envelope * np.sin(2 * np.pi * HeartbeatConstants.LUB_FREQUENCY_HZ * t_lub) * amp_factor
 
             # Add to heartbeat sound
             heartbeat[beat_start_sample:lub_end] += lub
@@ -221,7 +229,7 @@ class NaturalSoundGenerator(SoundProfileGenerator):
 
                 # Create envelope and waveform (softer than lub)
                 dub_envelope = np.exp(-(t_dub**2) / (2 * dub_env_width**2))
-                dub = 0.7 * dub_envelope * np.sin(2 * np.pi * 45 * t_dub) * amp_factor
+                dub = 0.7 * dub_envelope * np.sin(2 * np.pi * HeartbeatConstants.DUB_FREQUENCY_HZ * t_dub) * amp_factor
 
                 # Add to heartbeat sound
                 heartbeat[dub_start_sample:dub_end] += dub
@@ -233,7 +241,7 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         # Normalize
         max_val = np.max(np.abs(heartbeat))
         if max_val > 0:
-            heartbeat = heartbeat / max_val * 0.8
+            heartbeat = heartbeat / max_val * HeartbeatConstants.DEFAULT_AMPLITUDE
 
         return heartbeat
 
@@ -250,10 +258,15 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         samples = int(duration_seconds * self.sample_rate)
 
         # Start with filtered white noise
-        white_noise = np.random.normal(0, 0.5, samples)
+        white_noise = self.random_state.normal(0, 0.5, samples)
 
-        # Apply bandpass filter to focus on "shh" frequencies (2000-4000 Hz)
-        b, a = signal.butter(4, [2000 / (self.sample_rate / 2), 4000 / (self.sample_rate / 2)], "band")
+        # Apply bandpass filter to focus on "shh" frequencies
+        b, a = signal.butter(
+            4, 
+            [ShushingConstants.BANDPASS_LOW_HZ / (self.sample_rate / 2), 
+             ShushingConstants.BANDPASS_HIGH_HZ / (self.sample_rate / 2)], 
+            "band"
+        )
         shushing = signal.lfilter(b, a, white_noise)
 
         # Create a more natural, human-like rhythm
@@ -265,20 +278,25 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 self.sample_rate,
                 duration_seconds, 
                 octaves=2, 
-                persistence=0.6
+                persistence=0.6,
+                seed=self.random_state.seed
             )
 
             # Scale the noise to the appropriate rhythm rate
-            rhythm_scale = 1.5  # Average shushes per second
+            rhythm_scale = ShushingConstants.SHUSH_RATE_PER_SECOND
             indices = np.linspace(0, len(shush_rhythm) // 20, samples)
             indices = np.clip(indices.astype(int), 0, len(shush_rhythm) - 1)
 
-            # Transform to 0.3-1.0 range for a more natural shushing pattern
-            shush_modulation = 0.3 + 0.7 * (0.5 + 0.5 * shush_rhythm[indices])
+            # Transform to min-max range for a more natural shushing pattern
+            shush_modulation = (
+                ShushingConstants.MODULATION_MIN + 
+                (ShushingConstants.MODULATION_MAX - ShushingConstants.MODULATION_MIN) * 
+                (0.5 + 0.5 * shush_rhythm[indices])
+            )
         else:
             # Fallback to sine-based rhythm with some randomness
-            shush_rate = 1.5  # shushes per second
-            phase_variation = 0.2 * np.random.normal(0, 1, int(duration_seconds * shush_rate) + 1)
+            shush_rate = ShushingConstants.SHUSH_RATE_PER_SECOND
+            phase_variation = 0.2 * self.random_state.normal(0, 1, int(duration_seconds * shush_rate) + 1)
 
             # Create a modified sine wave with phase variations
             shush_modulation = np.zeros(samples)
@@ -290,10 +308,11 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 # Create a single shush cycle with natural attack and decay
                 cycle_len = end_idx - start_idx
                 if cycle_len > 0:
-                    cycle = (0.3 + 0.7 * np.sin(np.linspace(
-                        0 + phase_variation[i],
-                        np.pi + phase_variation[i],
-                        cycle_len)) ** 2)
+                    cycle = (
+                        ShushingConstants.MODULATION_MIN + 
+                        (ShushingConstants.MODULATION_MAX - ShushingConstants.MODULATION_MIN) * 
+                        np.sin(np.linspace(0 + phase_variation[i], np.pi + phase_variation[i], cycle_len)) ** 2
+                    )
                     shush_modulation[start_idx:end_idx] = cycle
 
         # Apply the modulation
@@ -311,7 +330,7 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         # Normalize
         max_val = np.max(np.abs(shushing))
         if max_val > 0:
-            shushing = shushing / max_val * 0.9
+            shushing = shushing / max_val * ShushingConstants.DEFAULT_AMPLITUDE
 
         return shushing
 
@@ -329,7 +348,7 @@ class NaturalSoundGenerator(SoundProfileGenerator):
 
         # Base noise is a mix of pink and white
         # Start with white noise
-        white = np.random.normal(0, 0.5, samples)
+        white = self.random_state.normal(0, 0.5, samples)
         
         # Create pink noise using simple filtering
         pink_filter = signal.firwin(1001, 1000 / (self.sample_rate / 2), window='hann')
@@ -348,7 +367,8 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 self.sample_rate,
                 duration_seconds, 
                 octaves=1, 
-                persistence=0.5
+                persistence=0.5,
+                seed=self.random_state.seed
             )
             
             # Stretch to get only a few variations over the duration
@@ -356,8 +376,8 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             indices = np.clip(indices.astype(int), 0, len(speed_variation) - 1)
             
             # Average rotation speed with variations
-            base_rotation = 4.0  # Hz
-            rotation_speed = base_rotation * (1 + 0.1 * speed_variation[indices])
+            base_rotation = FanConstants.BASE_ROTATION_HZ
+            rotation_speed = base_rotation * (1 + FanConstants.SPEED_VARIATION_PCT * speed_variation[indices])
 
             # Integrate speed to get phase
             phase = np.cumsum(rotation_speed) / self.sample_rate * 2 * np.pi
@@ -368,10 +388,10 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                                   0.02 * np.sin(3 * phase))
         else:
             # Fallback to simpler fan simulation
-            rotation_rate = 4.0  # rotations per second
+            rotation_rate = FanConstants.BASE_ROTATION_HZ
             
             # Add a slight drift to the rotation speed
-            drift = 0.05 * np.sin(2 * np.pi * 0.05 * t)  # 5% speed drift over 20 seconds
+            drift = FanConstants.SPEED_VARIATION_PCT * np.sin(2 * np.pi * 0.05 * t)
             rotation_modulation = 0.1 * np.sin(2 * np.pi * rotation_rate * (1 + drift) * t)
             
             # Add some harmonics
@@ -382,20 +402,24 @@ class NaturalSoundGenerator(SoundProfileGenerator):
 
         # Apply resonance filtering to simulate fan housing
         # Fans often have specific resonant frequencies
-        resonance_freqs = [180, 320, 560, 820]  # Hz
-        for freq in resonance_freqs:
-            q_factor = 10.0  # Narrowness of resonance
+        for freq in FanConstants.RESONANCE_FREQUENCIES_HZ:
+            q_factor = FanConstants.RESONANCE_Q_FACTOR
             b, a = signal.iirpeak(freq, q_factor, self.sample_rate)
             fan_sound = signal.lfilter(b, a, fan_sound)
 
         # Apply final bandpass filter to shape the spectrum
-        b, a = signal.butter(3, [80 / (self.sample_rate / 2), 4000 / (self.sample_rate / 2)], "band")
+        b, a = signal.butter(
+            3, 
+            [FanConstants.BANDPASS_LOW_HZ / (self.sample_rate / 2), 
+             FanConstants.BANDPASS_HIGH_HZ / (self.sample_rate / 2)], 
+            "band"
+        )
         fan_sound = signal.lfilter(b, a, fan_sound)
 
         # Normalize
         max_val = np.max(np.abs(fan_sound))
         if max_val > 0:
-            fan_sound = fan_sound / max_val * 0.85
+            fan_sound = fan_sound / max_val * FanConstants.DEFAULT_AMPLITUDE
 
         return fan_sound
 
@@ -429,7 +453,6 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         response_samples = int(response_time_ms * self.sample_rate / 1000)
 
         # Create simulated cry periods (for demonstration)
-        # In a real implementation, this would come from actual cry detection
         samples = len(audio)
         is_stereo = len(audio.shape) > 1
 
@@ -446,7 +469,8 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 self.sample_rate,
                 samples / self.sample_rate / 10, 
                 octaves=1, 
-                persistence=0.5
+                persistence=0.5,
+                seed=self.random_state.seed
             )
             # Stretch to audio length
             indices = np.linspace(0, len(cry_likelihood) - 1, samples)
@@ -471,7 +495,7 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 # Create cry periods of random lengths between 30-60 seconds
                 for start in filtered_points:
                     if start < samples - interval_min_samples:
-                        duration = random.randint(30, 60) * self.sample_rate
+                        duration = self.random_state.randint(30, 60) * self.sample_rate
                         end = min(start + duration, samples)
                         cry_periods.append((start, end))
         else:
@@ -479,7 +503,7 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             interval_samples = 8 * 60 * self.sample_rate  # 8 minutes
             for start in range(0, samples, interval_samples):
                 if start < samples - interval_min_samples:
-                    duration = random.randint(30, 60) * self.sample_rate
+                    duration = self.random_state.randint(30, 60) * self.sample_rate
                     end = min(start + duration, samples)
                     cry_periods.append((start, end))
 

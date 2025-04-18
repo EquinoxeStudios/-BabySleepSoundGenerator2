@@ -3,22 +3,28 @@ Core generator class that orchestrates sound generation and processing.
 """
 
 import os
-import random
 import logging
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-from models.constants import Constants, FrequencyFocus, RoomSize, LoopingMethod, OutputFormat
+from models.constants import (
+    Constants, FrequencyFocus, RoomSize, LoopingMethod, OutputFormat,
+    PerformanceConstants, HeartbeatConstants, ShushingConstants, FanConstants,
+    WombConstants, UmbilicalConstants, SpatialConstants
+)
 from models.parameters import (
     HeartbeatParameters, FrequencyEmphasis, LowPassFilter, FrequencyLimiting, CircadianAlignment,
     DynamicVolume, MotionSmoothing, MoroReflexPrevention, SleepCycleModulation, 
     DynamicShushing, BreathingModulation, SafetyFeatures, ParentalVoice, ProblemProfile
 )
+from models.sound_config import SoundConfiguration
 
 from sound_profiles.noise import NoiseGenerator
 from sound_profiles.natural import NaturalSoundGenerator
 from sound_profiles.womb import WombSoundGenerator
+from sound_profiles.factory import SoundGeneratorFactory
 
 from processing.spatial import SpatialProcessor
 from processing.room import RoomAcousticsProcessor
@@ -36,6 +42,10 @@ from output.visualization import SpectrumVisualizer
 
 from utils.optional_imports import HAS_PERLIN, HAS_LOUDNORM, HAS_LIBROSA, HAS_PYROOMACOUSTICS
 from utils.perlin_utils import generate_perlin_noise, apply_modulation, generate_dynamic_modulation
+from utils.random_state import RandomStateManager
+from utils.config import ConfigManager
+from utils.progress import ProgressReporter
+from utils.parallel import ParallelProcessor
 
 logger = logging.getLogger("BabySleepSoundGenerator")
 
@@ -51,8 +61,27 @@ class BabySleepSoundGenerator:
         target_loudness: float = Constants.DEFAULT_TARGET_LOUDNESS,
         use_hrtf: bool = True,
         room_simulation: bool = True,
+        config_file: str = None,
+        seed: int = None,
     ):
         """Initialize the generator with professional audio quality settings"""
+        # Load configuration if provided
+        if config_file:
+            self.config = ConfigManager.get_instance(config_file)
+            # Use values from config or fall back to defaults
+            sample_rate = self.config.get_int("DEFAULT", "sample_rate", sample_rate)
+            bit_depth = self.config.get_int("DEFAULT", "bit_depth", bit_depth)
+            channels = self.config.get_int("DEFAULT", "channels", channels)
+            target_loudness = self.config.get_float("DEFAULT", "target_loudness", target_loudness)
+            use_hrtf = self.config.get_bool("DEFAULT", "use_hrtf", use_hrtf)
+            room_simulation = self.config.get_bool("DEFAULT", "room_simulation", room_simulation)
+        else:
+            self.config = None
+        
+        # Initialize random state manager with the seed
+        self.random_state = RandomStateManager.get_instance(seed)
+        self.seed = self.random_state.seed  # Store the actual seed used
+        
         self.sample_rate = sample_rate
         self.bit_depth = bit_depth  # 16, 24, or 32
         self.channels = channels
@@ -85,10 +114,12 @@ class BabySleepSoundGenerator:
         # Safe listening duration at various levels (based on WHO guidelines)
         self.safe_duration_hours = Constants.WHO_SAFE_HOURS
 
-        # Initialize component generators
-        self.noise_generator = NoiseGenerator(sample_rate, self.use_perlin, modulation_depth=self.modulation_depth)
-        self.natural_generator = NaturalSoundGenerator(sample_rate, self.use_perlin)
-        self.womb_generator = WombSoundGenerator(sample_rate, self.use_perlin)
+        # Initialize component generators with seed
+        self.noise_generator = NoiseGenerator(
+            sample_rate, self.use_perlin, modulation_depth=self.modulation_depth, seed=self.seed
+        )
+        self.natural_generator = NaturalSoundGenerator(sample_rate, self.use_perlin, seed=self.seed)
+        self.womb_generator = WombSoundGenerator(sample_rate, self.use_perlin, seed=self.seed)
 
         # Initialize processors
         self.spatial_processor = SpatialProcessor(sample_rate, use_hrtf)
@@ -109,16 +140,27 @@ class BabySleepSoundGenerator:
         self.audio_exporter = AudioExporter(sample_rate, bit_depth, channels)
         self.spectrum_visualizer = SpectrumVisualizer(sample_rate)
         
-        # Define available sound profiles
+        # Initialize parallel processor
+        self.parallel_processor = ParallelProcessor()
+        
+        # Define available sound profiles with updated factory pattern
         self.sound_profiles = {
-            "white": lambda duration, **kwargs: self.noise_generator.generate(duration, sound_type="white", **kwargs),
-            "pink": lambda duration, **kwargs: self.noise_generator.generate(duration, sound_type="pink", **kwargs),
-            "brown": lambda duration, **kwargs: self.noise_generator.generate(duration, sound_type="brown", **kwargs),
-            "womb": lambda duration, **kwargs: self.womb_generator.generate(duration, sound_type="womb", **kwargs),
-            "heartbeat": lambda duration, **kwargs: self.natural_generator.generate(duration, sound_type="heartbeat", **kwargs),
-            "shushing": lambda duration, **kwargs: self.natural_generator.generate(duration, sound_type="shushing", **kwargs),
-            "fan": lambda duration, **kwargs: self.natural_generator.generate(duration, sound_type="fan", **kwargs),
-            "umbilical_swish": lambda duration, **kwargs: self.womb_generator.generate(duration, sound_type="umbilical_swish", **kwargs),
+            "white": lambda duration_seconds, **kwargs: 
+                self.noise_generator.generate(duration_seconds, sound_type="white", **kwargs),
+            "pink": lambda duration_seconds, **kwargs: 
+                self.noise_generator.generate(duration_seconds, sound_type="pink", **kwargs),
+            "brown": lambda duration_seconds, **kwargs: 
+                self.noise_generator.generate(duration_seconds, sound_type="brown", **kwargs),
+            "womb": lambda duration_seconds, **kwargs: 
+                self.womb_generator.generate(duration_seconds, sound_type="womb", **kwargs),
+            "heartbeat": lambda duration_seconds, **kwargs: 
+                self.natural_generator.generate(duration_seconds, sound_type="heartbeat", **kwargs),
+            "shushing": lambda duration_seconds, **kwargs: 
+                self.natural_generator.generate(duration_seconds, sound_type="shushing", **kwargs),
+            "fan": lambda duration_seconds, **kwargs: 
+                self.natural_generator.generate(duration_seconds, sound_type="fan", **kwargs),
+            "umbilical_swish": lambda duration_seconds, **kwargs: 
+                self.womb_generator.generate(duration_seconds, sound_type="umbilical_swish", **kwargs),
         }
 
         # Predefined baby problems and recommended profiles with enhanced scientific parameters
@@ -321,22 +363,34 @@ class BabySleepSoundGenerator:
         best_correlation = -np.inf
         best_position = len(analysis_channel) - segment_samples
 
-        # Search the last 20% of the audio for good matching points
-        search_start = int(len(analysis_channel) * 0.8)
+        # Search the last portion of the audio for good matching points
+        search_start = int(len(analysis_channel) * Constants.LOOP_SEARCH_START_PERCENTAGE)
 
         # To make search faster, we'll check candidates at regular intervals
-        step = self.sample_rate // 10  # Check every 100ms
+        step = self.sample_rate // Constants.LOOP_SEARCH_STEP_DIVIDER  # Check every fraction of a second
 
         # First pass: coarse search
+        correlations = []
+        positions = []
         for pos in range(search_start, len(analysis_channel) - segment_samples, step):
+            positions.append(pos)
             end_segment = analysis_channel[pos : pos + segment_samples]
+            
+            # Use FFT-based correlation for large segments (faster)
+            if segment_samples > 1000:
+                # FFT-based correlation
+                corr = np.abs(np.fft.ifft(
+                    np.fft.fft(begin_segment) * np.conjugate(np.fft.fft(end_segment))
+                ))
+                correlations.append(np.max(corr))
+            else:
+                # Direct correlation for smaller segments
+                correlations.append(np.max(np.correlate(begin_segment, end_segment, 'valid')))
 
-            # Calculate cross-correlation to find similarity
-            correlation = np.max(np.correlate(begin_segment, end_segment, 'valid'))
-
-            if correlation > best_correlation:
-                best_correlation = correlation
-                best_position = pos
+        # Find the best match from the coarse search
+        best_idx = np.argmax(correlations)
+        best_correlation = correlations[best_idx]
+        best_position = positions[best_idx]
 
         # Second pass: fine-tune by checking neighboring points
         fine_range = self.sample_rate // 2  # Check +/- 500ms around best point
@@ -447,6 +501,291 @@ class BabySleepSoundGenerator:
 
         logger.info("-------------------------------")
 
+    def generate_from_config(self, config: SoundConfiguration, progress_callback=None) -> str:
+        """
+        Generate a sound file based on a complete sound configuration.
+        
+        Args:
+            config: Sound configuration
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            Path to the generated audio file
+        """
+        # Validate configuration
+        if not config.validate():
+            raise ValueError("Invalid sound configuration")
+            
+        # Set random seed if provided
+        if config.seed is not None:
+            self.random_state.set_seed(config.seed)
+            
+        # Create progress reporter
+        total_steps = 10  # Approximate number of major steps
+        progress = ProgressReporter(
+            total_steps, 
+            f"Generating {config.name}", 
+            progress_callback
+        )
+        
+        # Calculate duration in seconds
+        duration_seconds = int(config.duration_seconds)
+        
+        # 1. Generate primary noise
+        progress.update(0, force=True, status_info={"current_operation": "Initializing"})
+        logger.info(f"Generating {config.primary_sound} sound...")
+        progress.update(0, status_info={"current_operation": f"Generating {config.primary_sound}"})
+        
+        # Get the appropriate generator
+        generator_type = SoundGeneratorFactory.get_generator_type_for_sound(config.primary_sound)
+        generator = SoundGeneratorFactory.create_generator(
+            generator_type, 
+            config.sample_rate, 
+            self.use_perlin, 
+            config.seed
+        )
+        
+        primary_sound = generator.generate(
+            duration_seconds,
+            sound_type=config.primary_sound,
+            **config.primary_sound_params
+        )
+        progress.update(1)
+        
+        # 2. Apply frequency shaping
+        logger.info(f"Applying {config.frequency_focus} frequency shaping...")
+        progress.update(0, status_info={"current_operation": "Applying frequency shaping"})
+        
+        # Extract additional frequency parameters if present
+        additional_params = {}
+        if config.frequency_emphasis is not None:
+            additional_params["frequency_emphasis"] = FrequencyEmphasis(**config.frequency_emphasis)
+        if config.low_pass_filter is not None:
+            additional_params["low_pass_filter"] = LowPassFilter(**config.low_pass_filter)
+        
+        shaped_noise = self.frequency_processor.apply_frequency_shaping(
+            primary_sound, config.frequency_focus, additional_params
+        )
+        progress.update(1)
+        
+        # 3. Generate overlay sounds in parallel if needed
+        overlay_sounds = []
+        mix_ratios = []
+        
+        if config.overlay_sounds:
+            logger.info("Generating overlay sounds...")
+            progress.update(0, status_info={
+                "current_operation": f"Generating {len(config.overlay_sounds)} overlay sounds"
+            })
+            
+            # Create tasks for parallel processing
+            overlay_tasks = []
+            
+            for overlay_config in config.overlay_sounds:
+                sound_type = overlay_config.get("type")
+                mix_ratio = overlay_config.get("mix_ratio", 0.2)
+                
+                if not sound_type:
+                    logger.warning(f"Skipping overlay with missing type: {overlay_config}")
+                    continue
+                
+                # Use a copy of the config without the type and mix_ratio
+                overlay_params = overlay_config.copy()
+                if "type" in overlay_params:
+                    overlay_params.pop("type")
+                if "mix_ratio" in overlay_params:
+                    overlay_params.pop("mix_ratio")
+                
+                # Get the appropriate generator
+                generator_type = SoundGeneratorFactory.get_generator_type_for_sound(sound_type)
+                
+                # Create generator instance
+                overlay_generator = SoundGeneratorFactory.create_generator(
+                    generator_type, 
+                    config.sample_rate, 
+                    self.use_perlin, 
+                    config.seed
+                )
+                
+                # Add task for parallel processing
+                overlay_tasks.append((
+                    overlay_generator.generate,
+                    {
+                        "duration_seconds": duration_seconds,
+                        "sound_type": sound_type,
+                        **overlay_params
+                    }
+                ))
+                
+                # Store mix ratio
+                mix_ratios.append(mix_ratio)
+            
+            # Process in parallel if there are multiple overlays
+            if len(overlay_tasks) > 1:
+                overlay_results = self.parallel_processor.process(
+                    overlay_tasks, 
+                    description="Generate overlay sounds"
+                )
+                overlay_sounds = [result for result in overlay_results if result is not None]
+            elif len(overlay_tasks) == 1:
+                # Just process directly for a single overlay
+                func, kwargs = overlay_tasks[0]
+                overlay_sounds = [func(**kwargs)]
+            
+            # Mix sounds if we have overlays
+            if overlay_sounds:
+                logger.info("Mixing sounds...")
+                progress.update(0, status_info={"current_operation": "Mixing sounds"})
+                
+                # Create motion smoothing parameters if specified
+                motion_smoothing = None
+                if hasattr(config, "motion_smoothing") and config.motion_smoothing:
+                    motion_smoothing = MotionSmoothing(**config.motion_smoothing)
+                
+                shaped_noise = self.mix_sounds(
+                    shaped_noise, overlay_sounds, mix_ratios, motion_smoothing
+                )
+        
+        progress.update(1)
+        
+        # 4. Apply spatial processing
+        logger.info("Applying spatial processing...")
+        progress.update(0, status_info={"current_operation": "Applying spatial processing"})
+        
+        # Apply HRTF-based spatialization or basic stereo widening
+        if len(shaped_noise.shape) == 1:  # Only apply if mono
+            stereo_audio = self.spatial_processor.apply_hrtf_spatialization(
+                shaped_noise, width=config.spatial_width
+            )
+        else:
+            # Already stereo, just adjust width
+            stereo_audio = self.spatial_processor.apply_basic_stereo_widening(
+                shaped_noise, width=config.spatial_width
+            )
+        progress.update(1)
+        
+        # 5. Apply room acoustics if specified
+        processed_audio = stereo_audio
+        if config.room_simulation and self.room_simulation:
+            logger.info(f"Applying {config.room_size} room acoustics...")
+            progress.update(0, status_info={"current_operation": "Applying room acoustics"})
+            
+            processed_audio = self.room_processor.apply_room_acoustics(
+                stereo_audio, room_size=config.room_size
+            )
+        progress.update(1)
+        
+        # 6. Apply effects
+        # Apply breathing modulation if specified
+        if config.breathing_modulation:
+            logger.info("Applying breathing rhythm modulation...")
+            progress.update(0, status_info={"current_operation": "Applying breathing modulation"})
+            
+            breathing_params = BreathingModulation(**config.breathing_modulation)
+            processed_audio = self.breathing_modulator.apply_breathing_modulation(
+                processed_audio, breathing_params
+            )
+        
+        # Apply sleep cycle modulation if specified
+        if config.sleep_cycle_modulation:
+            logger.info("Applying sleep cycle modulation...")
+            progress.update(0, status_info={"current_operation": "Applying sleep cycle modulation"})
+            
+            sleep_cycle_params = SleepCycleModulation(**config.sleep_cycle_modulation)
+            processed_audio = self.sleep_cycle_modulator.apply_sleep_cycle_modulation(
+                processed_audio, sleep_cycle_params
+            )
+        
+        # Apply Moro reflex prevention if specified
+        if config.moro_reflex_prevention:
+            logger.info("Applying Moro reflex prevention...")
+            progress.update(0, status_info={"current_operation": "Applying Moro reflex prevention"})
+            
+            reflex_params = MoroReflexPrevention(**config.moro_reflex_prevention)
+            processed_audio = self.reflex_preventer.apply_moro_reflex_prevention(
+                processed_audio, reflex_params
+            )
+        
+        # Apply dynamic volume if specified
+        if config.dynamic_volume:
+            logger.info("Applying dynamic volume adjustment...")
+            progress.update(0, status_info={"current_operation": "Applying dynamic volume"})
+            
+            dynamic_volume_params = DynamicVolume(**config.dynamic_volume)
+            processed_audio = self.dynamic_volume_processor.apply_dynamic_volume(
+                processed_audio, dynamic_volume_params
+            )
+        
+        progress.update(1)
+        
+        # 7. Create seamless loop
+        logger.info("Creating seamless loop...")
+        progress.update(0, status_info={"current_operation": "Creating seamless loop"})
+        looped = self.create_seamless_loop(processed_audio, self.crossfade_duration)
+        progress.update(1)
+        
+        # 8. Add fades
+        logger.info("Adding fade in/out...")
+        progress.update(0, status_info={"current_operation": "Adding fades"})
+        faded = self.add_fade(looped)
+        progress.update(1)
+        
+        # 9. Apply loudness normalization
+        logger.info("Applying EBU R128 loudness normalization...")
+        progress.update(0, status_info={"current_operation": "Applying loudness normalization"})
+        normalized = self.loudness_normalizer.apply_ebu_r128_normalization(faded)
+        progress.update(1)
+        
+        # 10. Export to file
+        # Generate output filename if not provided
+        if not hasattr(config, "output_file") or not config.output_file:
+            # Create filename from configuration
+            base_name = config.name.lower().replace(" ", "_")
+            output_file = f"{base_name}_{int(config.duration_seconds / 3600)}h.{config.output_format}"
+        else:
+            output_file = config.output_file
+            
+            # Ensure correct extension
+            if not output_file.lower().endswith(f".{config.output_format.lower()}"):
+                output_file = f"{os.path.splitext(output_file)[0]}.{config.output_format.lower()}"
+        
+        # Create directory if needed
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        
+        logger.info(f"Saving to {config.output_format.upper()} file...")
+        progress.update(0, status_info={"current_operation": f"Exporting to {config.output_format}"})
+        
+        # Save to file in appropriate format
+        if config.output_format.lower() == OutputFormat.MP3.value:
+            output_path = self.audio_exporter.save_to_mp3(normalized, output_file)
+        else:
+            output_path = self.audio_exporter.save_to_wav(
+                normalized, output_file, config.volume
+            )
+        
+        # Generate visualization if requested
+        if config.render_visualization:
+            logger.info("Generating frequency spectrum visualization...")
+            progress.update(0, status_info={"current_operation": "Generating visualization"})
+            
+            viz_path = os.path.splitext(output_file)[0] + "_spectrum.png"
+            self.spectrum_visualizer.visualize_spectrum(
+                normalized, config.name, viz_path
+            )
+        
+        # Print safety information based on volume
+        self._print_safety_information(config.volume)
+        
+        # Mark as complete
+        progress.complete(status_info={
+            "output_path": output_path,
+            "duration_seconds": duration_seconds,
+            "sample_rate": config.sample_rate,
+            "bit_depth": config.bit_depth
+        })
+        
+        return output_path
+
     def generate_from_profile(
         self,
         problem: str,
@@ -455,6 +794,7 @@ class BabySleepSoundGenerator:
         output_file: str = None,
         visualize: bool = False,
         format: str = "wav",
+        progress_callback = None,
     ) -> str:
         """
         Generate a sound file based on a predefined problem profile with enhanced quality
@@ -466,6 +806,7 @@ class BabySleepSoundGenerator:
             output_file: Path to save the output file
             visualize: Whether to generate spectrum visualization
             format: Output format ('wav' or 'mp3')
+            progress_callback: Optional callback for progress updates
             
         Returns:
             Path to the generated audio file
@@ -481,15 +822,28 @@ class BabySleepSoundGenerator:
         if volume is None:
             volume = profile.recommended_volume
 
+        # Create progress reporter
+        total_steps = 10  # Approximate number of major steps
+        progress = ProgressReporter(
+            total_steps, 
+            f"Generating {problem} profile", 
+            progress_callback
+        )
+
         # Calculate duration in seconds
         duration_seconds = int(duration_hours * 3600)
 
         # Generate primary noise
         logger.info(f"Generating {profile.primary_noise} noise...")
+        progress.update(0, force=True, status_info={
+            "current_operation": f"Generating {profile.primary_noise} noise"
+        })
         primary_noise = self.sound_profiles[profile.primary_noise](duration_seconds)
+        progress.update(1)
 
         # Apply frequency shaping with additional parameters
         logger.info(f"Applying {profile.frequency_focus} frequency shaping...")
+        progress.update(0, status_info={"current_operation": "Applying frequency shaping"})
         
         # Extract additional frequency parameters if present
         additional_params = {}
@@ -505,43 +859,80 @@ class BabySleepSoundGenerator:
         shaped_noise = self.frequency_processor.apply_frequency_shaping(
             primary_noise, profile.frequency_focus, additional_params
         )
+        progress.update(1)
 
         # Generate overlay sounds if specified
         overlay_sounds = []
         mix_ratios = []
 
-        for overlay_type in profile.overlay_sounds:
-            logger.info(f"Adding {overlay_type} overlay...")
-            if overlay_type == "heartbeat":
-                # Check for enhanced heartbeat parameters
-                if profile.heartbeat_parameters is not None:
-                    overlay = self.natural_generator.generate_heartbeat(
-                        duration_seconds, profile.heartbeat_parameters
-                    )
-                else:
-                    overlay = self.natural_generator.generate_heartbeat(duration_seconds)
-                overlay_sounds.append(overlay)
-                mix_ratios.append(0.2)  # 20% mix for heartbeat
-            elif overlay_type == "shushing":
-                overlay = self.natural_generator.generate_shushing_sound(duration_seconds)
-                overlay_sounds.append(overlay)
-                mix_ratios.append(0.3)  # 30% mix for shushing
-            elif overlay_type == "umbilical_swish":
-                overlay = self.womb_generator.generate_umbilical_swish(duration_seconds)
-                overlay_sounds.append(overlay)
-                mix_ratios.append(0.25)  # 25% mix for umbilical swish
-
-        # Mix sounds together with motion smoothing if specified
-        if overlay_sounds:
-            logger.info("Mixing sounds...")
-            mixed = self.mix_sounds(
-                shaped_noise, overlay_sounds, mix_ratios, profile.motion_smoothing
-            )
+        if profile.overlay_sounds:
+            logger.info("Generating overlay sounds...")
+            progress.update(0, status_info={
+                "current_operation": f"Generating overlay sounds"
+            })
+            
+            # Create tasks for parallel processing
+            overlay_tasks = []
+            
+            for overlay_type in profile.overlay_sounds:
+                if overlay_type == "heartbeat":
+                    if profile.heartbeat_parameters is not None:
+                        overlay_tasks.append((
+                            self.natural_generator.generate_heartbeat,
+                            {
+                                "duration_seconds": duration_seconds,
+                                "heartbeat_params": profile.heartbeat_parameters
+                            }
+                        ))
+                    else:
+                        overlay_tasks.append((
+                            self.natural_generator.generate_heartbeat,
+                            {"duration_seconds": duration_seconds}
+                        ))
+                    mix_ratios.append(0.2)  # 20% mix for heartbeat
+                elif overlay_type == "shushing":
+                    overlay_tasks.append((
+                        self.natural_generator.generate_shushing_sound,
+                        {"duration_seconds": duration_seconds}
+                    ))
+                    mix_ratios.append(0.3)  # 30% mix for shushing
+                elif overlay_type == "umbilical_swish":
+                    overlay_tasks.append((
+                        self.womb_generator.generate_umbilical_swish,
+                        {"duration_seconds": duration_seconds}
+                    ))
+                    mix_ratios.append(0.25)  # 25% mix for umbilical swish
+            
+            # Process in parallel if multiple overlays
+            if len(overlay_tasks) > 1:
+                overlay_results = self.parallel_processor.process(
+                    overlay_tasks, 
+                    description="Generate overlay sounds"
+                )
+                overlay_sounds = [result for result in overlay_results if result is not None]
+            elif len(overlay_tasks) == 1:
+                # Just process directly for a single overlay
+                func, kwargs = overlay_tasks[0]
+                overlay_sounds = [func(**kwargs)]
+            
+            # Mix sounds if we have overlays
+            if overlay_sounds:
+                logger.info("Mixing sounds...")
+                progress.update(0, status_info={"current_operation": "Mixing sounds"})
+                
+                mixed = self.mix_sounds(
+                    shaped_noise, overlay_sounds, mix_ratios, profile.motion_smoothing
+                )
+            else:
+                mixed = shaped_noise
         else:
             mixed = shaped_noise
+        
+        progress.update(1)
 
         # Apply stereo processing
         logger.info("Applying spatial processing...")
+        progress.update(0, status_info={"current_operation": "Applying spatial processing"})
         spatial_width = profile.spatial_width
 
         # Apply HRTF-based spatialization or basic stereo widening
@@ -550,17 +941,22 @@ class BabySleepSoundGenerator:
         else:
             # Already stereo, just adjust width
             stereo_audio = self.spatial_processor.apply_basic_stereo_widening(mixed, width=spatial_width)
+        progress.update(1)
 
         # Apply room acoustics if specified
+        processed_audio = stereo_audio
         if self.room_simulation:
             logger.info(f"Applying {profile.room_size} room acoustics...")
+            progress.update(0, status_info={"current_operation": "Applying room acoustics"})
+            
             processed_audio = self.room_processor.apply_room_acoustics(
                 stereo_audio, room_size=profile.room_size
             )
-        else:
-            processed_audio = stereo_audio
+        progress.update(1)
 
         # Apply enhanced features based on profile type
+        logger.info("Applying profile-specific effects...")
+        progress.update(0, status_info={"current_operation": "Applying profile effects"})
 
         # Apply Moro reflex prevention for startle_reflex profile
         if profile.moro_reflex_prevention is not None:
@@ -615,14 +1011,20 @@ class BabySleepSoundGenerator:
             processed_audio = self.dynamic_volume_processor.apply_dynamic_volume(
                 processed_audio, profile.dynamic_volume
             )
+        
+        progress.update(1)
 
         # Create seamless looping
         logger.info("Creating seamless loop...")
+        progress.update(0, status_info={"current_operation": "Creating seamless loop"})
         looped = self.create_seamless_loop(processed_audio, self.crossfade_duration)
+        progress.update(1)
 
         # Add fade in/out
         logger.info("Adding fade in/out...")
+        progress.update(0, status_info={"current_operation": "Adding fades"})
         faded = self.add_fade(looped)
+        progress.update(1)
 
         # Generate output filename if not provided
         if output_file is None:
@@ -630,10 +1032,17 @@ class BabySleepSoundGenerator:
 
         # Apply EBU R128 loudness normalization
         logger.info("Applying EBU R128 loudness normalization...")
+        progress.update(0, status_info={"current_operation": "Applying loudness normalization"})
         normalized = self.loudness_normalizer.apply_ebu_r128_normalization(faded)
+        progress.update(1)
 
         # Save to file in appropriate format
         logger.info(f"Saving to {format.upper()} file...")
+        progress.update(0, status_info={"current_operation": f"Exporting to {format}"})
+        
+        # Create directory if needed
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        
         if format.lower() == "mp3":
             output_path = self.audio_exporter.save_to_mp3(normalized, output_file)
         else:
@@ -642,6 +1051,8 @@ class BabySleepSoundGenerator:
         # Visualize if requested
         if visualize:
             logger.info("Generating frequency spectrum visualization...")
+            progress.update(0, status_info={"current_operation": "Generating visualization"})
+            
             viz_path = os.path.splitext(output_file)[0] + "_spectrum.png"
             self.spectrum_visualizer.visualize_spectrum(normalized, f"{problem} Noise Profile", viz_path)
 
@@ -650,6 +1061,13 @@ class BabySleepSoundGenerator:
         # Print safety information based on volume
         self._print_safety_information(volume)
 
+        # Mark as complete
+        progress.complete(status_info={
+            "output_path": output_path,
+            "duration_hours": duration_hours,
+            "problem": problem
+        })
+        
         return output_path
 
     def generate_custom(
@@ -673,6 +1091,7 @@ class BabySleepSoundGenerator:
         dynamic_volume: bool = False,
         frequency_emphasis_params: Dict[str, Any] = None,
         low_pass_filter_hz: Optional[float] = None,
+        progress_callback = None,
     ) -> str:
         """
         Generate a custom sound profile with enhanced quality and optional advanced parameters
@@ -696,6 +1115,7 @@ class BabySleepSoundGenerator:
             dynamic_volume: Whether to apply dynamic volume
             frequency_emphasis_params: Custom parameters for frequency emphasis
             low_pass_filter_hz: Cutoff frequency for low-pass filter
+            progress_callback: Optional callback for progress updates
             
         Returns:
             Path to the generated audio file
@@ -705,13 +1125,25 @@ class BabySleepSoundGenerator:
             raise ValueError(
                 f"Unknown noise type: {primary_noise}. Available types: {list(self.sound_profiles.keys())}"
             )
+            
+        # Create progress reporter
+        total_steps = 10  # Approximate number of major steps
+        progress = ProgressReporter(
+            total_steps, 
+            f"Generating custom {primary_noise} sound", 
+            progress_callback
+        )
 
         # Duration in seconds
         duration_seconds = int(duration_hours * 3600)
 
         # Generate primary noise
         logger.info(f"Generating {primary_noise} noise...")
+        progress.update(0, force=True, status_info={
+            "current_operation": f"Generating {primary_noise} noise"
+        })
         primary = self.sound_profiles[primary_noise](duration_seconds)
+        progress.update(1)
 
         # Create additional parameters for frequency shaping
         additional_params = {}
@@ -733,37 +1165,69 @@ class BabySleepSoundGenerator:
 
         # Apply frequency shaping
         logger.info(f"Applying {frequency_focus} frequency shaping...")
+        progress.update(0, status_info={"current_operation": "Applying frequency shaping"})
         shaped = self.frequency_processor.apply_frequency_shaping(primary, frequency_focus, additional_params)
+        progress.update(1)
 
         # Generate overlay sounds
         overlay_arrays = []
         mix_ratios = []
 
-        for overlay in overlay_sounds:
-            if overlay in self.sound_profiles:
-                logger.info(f"Adding {overlay} overlay...")
+        if overlay_sounds:
+            logger.info("Generating overlay sounds...")
+            progress.update(0, status_info={
+                "current_operation": f"Generating overlay sounds"
+            })
+            
+            # Create tasks for parallel processing
+            overlay_tasks = []
+            
+            for overlay in overlay_sounds:
+                if overlay in self.sound_profiles:
+                    logger.info(f"Adding {overlay} overlay...")
 
-                # Special case for heartbeat with variable rate
-                if overlay == "heartbeat" and variable_heartbeat:
-                    heartbeat_params = HeartbeatParameters(
-                        variable_rate=True,
-                        bpm_range=heartbeat_bpm_range,
-                    )
-                    overlay_array = self.natural_generator.generate_heartbeat(duration_seconds, heartbeat_params)
-                else:
-                    overlay_array = self.sound_profiles[overlay](duration_seconds)
+                    # Special case for heartbeat with variable rate
+                    if overlay == "heartbeat" and variable_heartbeat:
+                        heartbeat_params = HeartbeatParameters(
+                            variable_rate=True,
+                            bpm_range=heartbeat_bpm_range,
+                        )
+                        overlay_tasks.append((
+                            self.natural_generator.generate_heartbeat,
+                            {
+                                "duration_seconds": duration_seconds,
+                                "heartbeat_params": heartbeat_params
+                            }
+                        ))
+                    else:
+                        overlay_tasks.append((
+                            self.sound_profiles[overlay],
+                            {"duration_seconds": duration_seconds}
+                        ))
 
-                overlay_arrays.append(overlay_array)
-
-                # Default mix ratios
-                if overlay == "heartbeat":
-                    mix_ratios.append(0.2)  # 20% heartbeat
-                elif overlay == "shushing":
-                    mix_ratios.append(0.3)  # 30% shushing
-                elif overlay == "umbilical_swish":
-                    mix_ratios.append(0.25)  # 25% umbilical swish
-                else:
-                    mix_ratios.append(0.2)  # 20% default
+                    # Default mix ratios
+                    if overlay == "heartbeat":
+                        mix_ratios.append(0.2)  # 20% heartbeat
+                    elif overlay == "shushing":
+                        mix_ratios.append(0.3)  # 30% shushing
+                    elif overlay == "umbilical_swish":
+                        mix_ratios.append(0.25)  # 25% umbilical swish
+                    else:
+                        mix_ratios.append(0.2)  # 20% default
+            
+            # Process in parallel if multiple overlays
+            if len(overlay_tasks) > 1:
+                overlay_results = self.parallel_processor.process(
+                    overlay_tasks, 
+                    description="Generate overlay sounds"
+                )
+                overlay_arrays = [result for result in overlay_results if result is not None]
+            elif len(overlay_tasks) == 1:
+                # Just process directly for a single overlay
+                func, kwargs = overlay_tasks[0]
+                overlay_arrays = [func(**kwargs)]
+            
+        progress.update(1)
 
         # Create motion smoothing parameters if requested
         motion_params = None
@@ -773,26 +1237,36 @@ class BabySleepSoundGenerator:
         # Mix sounds
         if overlay_arrays:
             logger.info("Mixing sounds...")
+            progress.update(0, status_info={"current_operation": "Mixing sounds"})
             mixed = self.mix_sounds(shaped, overlay_arrays, mix_ratios, motion_params)
         else:
             mixed = shaped
+        progress.update(1)
 
         # Apply stereo processing
         logger.info("Applying spatial processing...")
+        progress.update(0, status_info={"current_operation": "Applying spatial processing"})
+        
         # Apply HRTF-based spatialization or basic stereo widening
         if len(mixed.shape) == 1:  # Only apply if mono
             stereo_audio = self.spatial_processor.apply_hrtf_spatialization(mixed, width=spatial_width)
         else:
             # Already stereo, just adjust width
             stereo_audio = self.spatial_processor.apply_basic_stereo_widening(mixed, width=spatial_width)
+        progress.update(1)
 
         # Apply room acoustics if specified
+        processed_audio = stereo_audio
         if self.room_simulation:
             logger.info(f"Applying {room_size} room acoustics...")
+            progress.update(0, status_info={"current_operation": "Applying room acoustics"})
             processed_audio = self.room_processor.apply_room_acoustics(stereo_audio, room_size=room_size)
-        else:
-            processed_audio = stereo_audio
+        progress.update(1)
 
+        # Apply effects
+        logger.info("Applying effects...")
+        progress.update(0, status_info={"current_operation": "Applying effects"})
+        
         # Apply breathing modulation if requested
         if breathing_modulation:
             logger.info("Applying breathing rhythm modulation...")
@@ -810,14 +1284,19 @@ class BabySleepSoundGenerator:
                 fade_duration_seconds=180.0,  # 3 minutes
             )
             processed_audio = self.dynamic_volume_processor.apply_dynamic_volume(processed_audio, dynamic_volume_params)
+        progress.update(1)
 
         # Create seamless loop
         logger.info("Creating seamless loop...")
+        progress.update(0, status_info={"current_operation": "Creating seamless loop"})
         looped = self.create_seamless_loop(processed_audio)
+        progress.update(1)
 
         # Add fades
         logger.info("Adding fade in/out...")
+        progress.update(0, status_info={"current_operation": "Adding fades"})
         faded = self.add_fade(looped)
+        progress.update(1)
 
         # Generate output filename if not provided
         if output_file is None:
@@ -826,10 +1305,17 @@ class BabySleepSoundGenerator:
 
         # Apply EBU R128 loudness normalization
         logger.info("Applying EBU R128 loudness normalization...")
+        progress.update(0, status_info={"current_operation": "Applying loudness normalization"})
         normalized = self.loudness_normalizer.apply_ebu_r128_normalization(faded)
+        progress.update(1)
 
         # Save to file in appropriate format
         logger.info(f"Saving to {format.upper()} file...")
+        progress.update(0, status_info={"current_operation": f"Exporting to {format}"})
+        
+        # Create directory if needed
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        
         if format.lower() == "mp3":
             output_path = self.audio_exporter.save_to_mp3(normalized, output_file)
         else:
@@ -838,6 +1324,7 @@ class BabySleepSoundGenerator:
         # Visualize if requested
         if visualize:
             logger.info("Generating frequency spectrum visualization...")
+            progress.update(0, status_info={"current_operation": "Generating visualization"})
             viz_path = os.path.splitext(output_file)[0] + "_spectrum.png"
             self.spectrum_visualizer.visualize_spectrum(normalized, f"Custom {primary_noise} Noise Profile", viz_path)
 
@@ -845,6 +1332,14 @@ class BabySleepSoundGenerator:
         self._print_safety_information(volume)
 
         logger.info(f"Done! Generated {format.upper()} file: {output_path}")
+        
+        # Mark as complete
+        progress.complete(status_info={
+            "output_path": output_path,
+            "duration_hours": duration_hours,
+            "primary_noise": primary_noise
+        })
+        
         return output_path
 
     @classmethod
