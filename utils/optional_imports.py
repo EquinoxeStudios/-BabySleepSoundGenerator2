@@ -18,6 +18,13 @@ HAS_MATPLOTLIB = False
 HAS_NUMBA = False
 HAS_TQDM = False
 
+# Initialize flags for new enhanced dependencies
+HAS_CUPY = False
+HAS_TORCH = False
+HAS_TORCHAUDIO = False
+HAS_ISO226 = False
+HAS_AUDIO_DIFFUSION = False
+
 # Initialize module holders for optional dependencies
 NOISE_MODULE = None
 PYLOUDNORM_MODULE = None
@@ -29,12 +36,21 @@ MATPLOTLIB_PLT = None
 NUMBA_MODULE = None
 TQDM_MODULE = None
 
+# Initialize module holders for new enhanced dependencies
+CUPY_MODULE = None
+TORCH_MODULE = None
+TORCHAUDIO_MODULE = None
+ISO226_MODULE = None
+AUDIO_DIFFUSION_MODULE = None
+
 def check_imports() -> Dict[str, bool]:
     """Check which optional dependencies are available and return status."""
     global HAS_PERLIN, HAS_LOUDNORM, HAS_SOUNDFILE, HAS_LIBROSA
     global HAS_PYROOMACOUSTICS, HAS_PYDUB, HAS_MATPLOTLIB, HAS_NUMBA, HAS_TQDM
+    global HAS_CUPY, HAS_TORCH, HAS_TORCHAUDIO, HAS_ISO226, HAS_AUDIO_DIFFUSION
     global NOISE_MODULE, PYLOUDNORM_MODULE, SOUNDFILE_MODULE, LIBROSA_MODULE
     global PYROOMACOUSTICS_MODULE, PYDUB_AUDIOSEGMENT, MATPLOTLIB_PLT, NUMBA_MODULE, TQDM_MODULE
+    global CUPY_MODULE, TORCH_MODULE, TORCHAUDIO_MODULE, ISO226_MODULE, AUDIO_DIFFUSION_MODULE
 
     # Try to import optional libraries - create fallbacks if not available
     try:
@@ -43,10 +59,9 @@ def check_imports() -> Dict[str, bool]:
         NOISE_MODULE = noise
     except ImportError:
         HAS_PERLIN = False
-        logger.warning(
-            "Warning: 'noise' library not found. Installing it will enable higher quality Perlin noise textures."
+        logger.error(
+            "Error: Required dependency 'noise' not found. Please install it with: pip install noise"
         )
-        logger.warning("You can install it with: pip install noise")
 
     try:
         import pyloudnorm as pyln
@@ -54,10 +69,9 @@ def check_imports() -> Dict[str, bool]:
         PYLOUDNORM_MODULE = pyln
     except ImportError:
         HAS_LOUDNORM = False
-        logger.warning(
-            "Warning: 'pyloudnorm' library not found. Installing it will enable EBU R128 loudness normalization."
+        logger.error(
+            "Error: Required dependency 'pyloudnorm' not found. Please install it with: pip install pyloudnorm"
         )
-        logger.warning("You can install it with: pip install pyloudnorm")
 
     try:
         import soundfile as sf
@@ -65,10 +79,9 @@ def check_imports() -> Dict[str, bool]:
         SOUNDFILE_MODULE = sf
     except ImportError:
         HAS_SOUNDFILE = False
-        logger.warning(
-            "Warning: 'soundfile' library not found. It provides better audio file handling."
+        logger.error(
+            "Error: Required dependency 'soundfile' not found. Please install it with: pip install soundfile"
         )
-        logger.warning("You can install it with: pip install soundfile")
 
     try:
         import librosa
@@ -76,10 +89,9 @@ def check_imports() -> Dict[str, bool]:
         LIBROSA_MODULE = librosa
     except ImportError:
         HAS_LIBROSA = False
-        logger.warning(
-            "Warning: 'librosa' library not found. It provides advanced audio processing capabilities."
+        logger.error(
+            "Error: Required dependency 'librosa' not found. Please install it with: pip install librosa"
         )
-        logger.warning("You can install it with: pip install librosa")
 
     try:
         import pyroomacoustics as pra
@@ -87,10 +99,9 @@ def check_imports() -> Dict[str, bool]:
         PYROOMACOUSTICS_MODULE = pra
     except ImportError:
         HAS_PYROOMACOUSTICS = False
-        logger.warning(
-            "Warning: 'pyroomacoustics' library not found. It provides room impulse response simulations."
+        logger.error(
+            "Error: Required dependency 'pyroomacoustics' not found. Please install it with: pip install pyroomacoustics"
         )
-        logger.warning("You can install it with: pip install pyroomacoustics")
 
     try:
         from pydub import AudioSegment
@@ -98,10 +109,9 @@ def check_imports() -> Dict[str, bool]:
         PYDUB_AUDIOSEGMENT = AudioSegment
     except ImportError:
         HAS_PYDUB = False
-        logger.warning(
-            "Warning: 'pydub' library not found. MP3 export will not be available."
+        logger.error(
+            "Error: Required dependency 'pydub' not found. Please install it with: pip install pydub"
         )
-        logger.warning("You can install it with: pip install pydub")
 
     try:
         import matplotlib.pyplot as plt
@@ -109,10 +119,9 @@ def check_imports() -> Dict[str, bool]:
         MATPLOTLIB_PLT = plt
     except ImportError:
         HAS_MATPLOTLIB = False
-        logger.warning(
-            "Warning: 'matplotlib' library not found. Visualization will not be available."
+        logger.error(
+            "Error: Required dependency 'matplotlib' not found. Please install it with: pip install matplotlib"
         )
-        logger.warning("You can install it with: pip install matplotlib")
 
     try:
         import numba
@@ -120,10 +129,9 @@ def check_imports() -> Dict[str, bool]:
         NUMBA_MODULE = numba
     except ImportError:
         HAS_NUMBA = False
-        logger.warning(
-            "Warning: 'numba' library not found. Performance optimizations will be limited."
+        logger.error(
+            "Error: Required dependency 'numba' not found. Please install it with: pip install numba"
         )
-        logger.warning("You can install it with: pip install numba")
         
     try:
         import tqdm
@@ -131,10 +139,55 @@ def check_imports() -> Dict[str, bool]:
         TQDM_MODULE = tqdm
     except ImportError:
         HAS_TQDM = False
-        logger.warning(
-            "Warning: 'tqdm' library not found. Progress bars will not be available."
+        logger.error(
+            "Error: Required dependency 'tqdm' not found. Please install it with: pip install tqdm"
         )
-        logger.warning("You can install it with: pip install tqdm")
+    
+    # Check for enhanced dependencies
+    try:
+        import cupy
+        HAS_CUPY = True
+        CUPY_MODULE = cupy
+        logger.info("CuPy found - GPU acceleration available")
+    except ImportError:
+        HAS_CUPY = False
+        logger.error("Error: Required dependency 'cupy' not found. Please install it with: pip install cupy")
+        
+    try:
+        import torch
+        HAS_TORCH = True
+        TORCH_MODULE = torch
+        logger.info("PyTorch found")
+    except ImportError:
+        HAS_TORCH = False
+        logger.error("Error: Required dependency 'torch' not found. Please install it with: pip install torch")
+        
+    try:
+        import torchaudio
+        HAS_TORCHAUDIO = True
+        TORCHAUDIO_MODULE = torchaudio
+        logger.info(f"TorchAudio found: version {torchaudio.__version__}")
+    except ImportError:
+        HAS_TORCHAUDIO = False
+        logger.error("Error: Required dependency 'torchaudio' not found. Please install it with: pip install torchaudio")
+        
+    try:
+        import iso226
+        HAS_ISO226 = True
+        ISO226_MODULE = iso226
+        logger.info("ISO-226 library found")
+    except ImportError:
+        HAS_ISO226 = False
+        logger.error("Error: Required dependency 'iso226' not found. Please install it with: pip install iso226")
+        
+    try:
+        import audio_diffusion_pytorch
+        HAS_AUDIO_DIFFUSION = True
+        AUDIO_DIFFUSION_MODULE = audio_diffusion_pytorch
+        logger.info("Audio Diffusion library found")
+    except ImportError:
+        HAS_AUDIO_DIFFUSION = False
+        logger.error("Error: Required dependency 'audio-diffusion-pytorch' not found. Please install it with: pip install audio-diffusion-pytorch")
         
     # Return dictionary of import statuses
     return {
@@ -146,7 +199,12 @@ def check_imports() -> Dict[str, bool]:
         "pydub": HAS_PYDUB,
         "matplotlib": HAS_MATPLOTLIB,
         "numba": HAS_NUMBA,
-        "tqdm": HAS_TQDM
+        "tqdm": HAS_TQDM,
+        "cupy": HAS_CUPY,
+        "torch": HAS_TORCH,
+        "torchaudio": HAS_TORCHAUDIO,
+        "iso226": HAS_ISO226,
+        "audio_diffusion": HAS_AUDIO_DIFFUSION
     }
 
 # Run the import checks when module is loaded
@@ -187,3 +245,23 @@ def get_numba_module():
 def get_tqdm_module():
     """Get the tqdm module if available."""
     return TQDM_MODULE
+
+def get_cupy_module():
+    """Get the cupy module if available."""
+    return CUPY_MODULE
+
+def get_torch_module():
+    """Get the PyTorch module if available."""
+    return TORCH_MODULE
+
+def get_torchaudio_module():
+    """Get the TorchAudio module if available."""
+    return TORCHAUDIO_MODULE
+
+def get_iso226_module():
+    """Get the ISO-226 module if available."""
+    return ISO226_MODULE
+
+def get_audio_diffusion_module():
+    """Get the audio diffusion module if available."""
+    return AUDIO_DIFFUSION_MODULE

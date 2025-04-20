@@ -15,6 +15,11 @@ Enhanced with:
 - Room impulse response simulations
 - HRTF-based spatialization
 - Developmental stage-specific sound profiles with research-backed parameters
+- GPU-accelerated processing (if CuPy or PyTorch is available)
+- Equal loudness filtering for better perceptual quality
+- Organic micro-drift for more natural sound variations
+- Soft-knee limiter for optimal levels without distortion
+- Optional neural audio diffusion polish
 """
 
 import argparse
@@ -22,7 +27,7 @@ import logging
 import time
 from pathlib import Path
 
-from models.constants import Constants, FrequencyFocus, RoomSize, OutputFormat
+from models.constants import Constants, FrequencyFocus, RoomSize, OutputFormat, NoiseColor
 from generator import BabySleepSoundGenerator
 from utils.logging import setup_logging
 
@@ -145,10 +150,39 @@ def parse_arguments():
         action="store_true", 
         help="Enable automatic volume reduction over time"
     )
+
+    # Enhanced noise generator options
+    parser.add_argument(
+        "--disable-equal-loudness", 
+        action="store_true", 
+        help="Disable equal loudness compensation"
+    )
+    parser.add_argument(
+        "--disable-organic-drift", 
+        action="store_true", 
+        help="Disable organic micro-drift effect"
+    )
+    parser.add_argument(
+        "--disable-limiter", 
+        action="store_true", 
+        help="Disable soft-knee limiter"
+    )
+    parser.add_argument(
+        "--enable-diffusion", 
+        action="store_true", 
+        help="Enable audio diffusion polish (requires GPU)"
+    )
+    
+    # Debug and performance options
     parser.add_argument(
         "--verbose", 
         action="store_true", 
         help="Enable verbose logging"
+    )
+    parser.add_argument(
+        "--seed", 
+        type=int,
+        help="Random seed for reproducible noise generation"
     )
 
     return parser.parse_args()
@@ -180,26 +214,55 @@ def display_available_options(generator):
         else:
             print(f"  - {format.value}: Compressed audio, smaller file size but slightly lower quality")
 
-    from utils.optional_imports import HAS_LOUDNORM, HAS_LIBROSA, HAS_PYROOMACOUSTICS
+    from utils.optional_imports import (
+        HAS_LOUDNORM, HAS_LIBROSA, HAS_PYROOMACOUSTICS,
+        HAS_CUPY, HAS_TORCH, HAS_TORCHAUDIO, HAS_ISO226, HAS_AUDIO_DIFFUSION
+    )
+    
+    print("\nFeature Status:")
     
     print("\nEBU R128 / ITU-R BS.1770 Loudness Normalization:")
     if HAS_LOUDNORM:
         print("  - Enabled: All output audio will be normalized to broadcast standards")
         print(f"  - Target loudness: {generator.target_loudness} LUFS")
     else:
-        print("  - Not available: Install 'pyloudnorm' for broadcast standard loudness")
+        print("  - ERROR: Missing required dependency 'pyloudnorm'")
 
     print("\nHRTF-based Spatialization:")
     if generator.use_hrtf and HAS_LIBROSA:
         print("  - Enabled: Audio will have enhanced spatial characteristics")
     else:
-        print("  - Not available: Install 'librosa' for enhanced spatial processing")
+        print("  - ERROR: Missing required dependency 'librosa'")
 
     print("\nRoom Impulse Response Simulation:")
     if generator.room_simulation and HAS_PYROOMACOUSTICS:
         print("  - Enabled: Audio will have realistic room acoustics")
     else:
-        print("  - Not available: Install 'pyroomacoustics' for room simulation")
+        print("  - ERROR: Missing required dependency 'pyroomacoustics'")
+        
+    print("\nGPU Acceleration:")
+    if HAS_CUPY:
+        print("  - CuPy: Available for GPU-accelerated noise generation")
+    else:
+        print("  - ERROR: Missing required dependency 'cupy'")
+        
+    if HAS_TORCH:
+        print("  - PyTorch: Available for neural audio processing")
+    else:
+        print("  - ERROR: Missing required dependency 'torch'")
+        
+    print("\nEnhanced Audio Features:")
+    if HAS_ISO226:
+        print("  - Equal Loudness Compensation: Available")
+    else:
+        print("  - ERROR: Missing required dependency 'iso226'")
+        
+    if HAS_AUDIO_DIFFUSION:
+        print("  - Neural Audio Diffusion: Available for audio polish")
+    else:
+        print("  - ERROR: Missing required dependency 'audio_diffusion_pytorch'")
+    
+    print("\nAdditional setup options are available with --help")
 
 
 def main():
@@ -220,11 +283,22 @@ def main():
         target_loudness=args.target_loudness,
         use_hrtf=not args.disable_hrtf,
         room_simulation=not args.disable_room_simulation,
+        seed=args.seed,
     )
 
     # Apply settings
     if args.disable_modulation:
         generator.use_dynamic_modulation = False
+        
+    # Apply enhanced noise generator settings
+    if args.disable_equal_loudness:
+        generator.use_equal_loudness = False
+    if args.disable_organic_drift:
+        generator.use_organic_drift = False
+    if args.disable_limiter:
+        generator.use_limiter = False
+    if args.enable_diffusion:
+        generator.use_diffusion = True
 
     if args.mode == "list":
         display_available_options(generator)
@@ -267,6 +341,10 @@ def main():
             motion_smoothing=args.motion_smoothing,
             breathing_modulation=args.breathing_modulation,
             dynamic_volume=args.dynamic_volume,
+            use_equal_loudness=not args.disable_equal_loudness,
+            use_limiter=not args.disable_limiter,
+            use_organic_drift=not args.disable_organic_drift, 
+            use_diffusion=args.enable_diffusion,
         )
 
     # Calculate and log total processing time

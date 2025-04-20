@@ -106,6 +106,13 @@ class SpatialConstants:
     DEFAULT_STEREO_WIDTH = 0.5
 
 
+class NoiseColor(str, Enum):
+    """Enumeration of noise colors"""
+    WHITE = "white"
+    PINK = "pink"
+    BROWN = "brown"
+
+
 class FrequencyFocus(str, Enum):
     """Enumeration of frequency focus options"""
     LOW = "low"

@@ -389,11 +389,11 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             shushing = shushing * shush_modulation
 
             # Apply subtle formant filtering to make it sound more like human shushing
+            # FIXED: Removed the fs parameter which was causing the error
             formant_filter = signal.firwin2(
                 101,
                 [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-                [0.1, 0.2, 0.5, 1.0, 0.8, 0.6, 0.7, 0.8, 0.6, 0.4, 0.3, 0.2, 0.1, 0.05],
-                fs=self.sample_rate,
+                [0.1, 0.2, 0.5, 1.0, 0.8, 0.6, 0.7, 0.8, 0.6, 0.4, 0.3, 0.2, 0.1, 0.05]
             )
             shushing = signal.lfilter(formant_filter, 1, shushing)
 
@@ -626,8 +626,16 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             # Apply envelope to shushing efficiently
             dynamic_shushing = apply_modulation(shushing, envelope)
 
-            # Mix with original audio (assuming shushing is already mixed at 0.3 ratio)
+            # Mix with original audio (ensuring compatible shapes)
             if is_stereo:
+                # FIXED: Convert dynamic_shushing to stereo if it's mono
+                if len(dynamic_shushing.shape) == 1:
+                    dynamic_shushing_stereo = np.zeros_like(audio)
+                    for c in range(audio.shape[1]):
+                        dynamic_shushing_stereo[:, c] = dynamic_shushing
+                    dynamic_shushing = dynamic_shushing_stereo
+                
+                # Now both audio and dynamic_shushing are stereo
                 output = audio * 0.7 + dynamic_shushing * 0.3
             else:
                 output = audio * 0.7 + dynamic_shushing * 0.3
@@ -645,7 +653,14 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             try:
                 is_stereo = len(audio.shape) > 1
                 if is_stereo:
-                    output = audio * 0.7 + shushing * 0.3
+                    # Ensure shushing is stereo before mixing
+                    if len(shushing.shape) == 1:
+                        shushing_stereo = np.zeros_like(audio)
+                        for c in range(audio.shape[1]):
+                            shushing_stereo[:, c] = shushing
+                        output = audio * 0.7 + shushing_stereo * 0.3
+                    else:
+                        output = audio * 0.7 + shushing * 0.3
                 else:
                     output = audio * 0.7 + shushing * 0.3
                     
