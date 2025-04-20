@@ -789,25 +789,25 @@ class NoiseGenerator(SoundProfileGenerator):
             logger.error(f"Error generating fallback noise: {e}")
             # In case of catastrophic failure, return empty array
             return np.zeros(int(duration_seconds * self.sample_rate))
-    
-def _get_efficient_randn(self):
-    """Return a function that efficiently generates random numbers on CPU"""
-    if self._using_gpu:
-        import cupy as cp
-        # Capture the current RNG in a local variable to avoid thread issues
-        rng = self._rng
-        # Create a closure that handles the GPU->CPU transfer efficiently
-        def randn_cpu(n, mean=0.0, std=1.0):
-            noise = rng.normal(mean, std, n, dtype=cp.float32)
-            return cp.asnumpy(noise)
-        return randn_cpu
-    else:
-        # Capture the current RNG in a local variable to avoid thread issues
-        rng = self._rng
-        # For CPU, just return a function that calls the RNG directly
-        def randn_cpu(n, mean=0.0, std=1.0):
-            return rng.normal(mean, std, n)
-        return randn_cpu
+
+    def _get_efficient_randn(self):
+        """Return a function that efficiently generates random numbers on CPU"""
+        if self._using_gpu:
+            import cupy as cp
+            # Capture the current RNG in a local variable to avoid thread issues
+            rng = self._rng
+            # Create a closure that handles the GPU->CPU transfer efficiently
+            def randn_cpu(n, mean=0.0, std=1.0):
+                noise = rng.normal(mean, std, n, dtype=cp.float32)
+                return cp.asnumpy(noise)
+            return randn_cpu
+        else:
+            # Capture the current RNG in a local variable to avoid thread issues
+            rng = self._rng
+            # For CPU, just return a function that calls the RNG directly
+            def randn_cpu(n, mean=0.0, std=1.0):
+                return rng.normal(mean, std, n)
+            return randn_cpu
 
     def _apply_filters(self, audio: np.ndarray) -> np.ndarray:
         """Apply DC removal and anti-aliasing filters"""
@@ -819,15 +819,15 @@ def _get_efficient_randn(self):
                 _CACHED_FILTERS[cache_key] = ((hp_b, hp_a), (lp_b, lp_a))
             else:
                 (hp_b, hp_a), (lp_b, lp_a) = _CACHED_FILTERS[cache_key]
-        
+
         # Apply highpass for DC removal
         audio = signal.lfilter(hp_b, hp_a, audio)
-        
+
         # Apply lowpass for anti-aliasing
         audio = signal.lfilter(lp_b, lp_a, audio)
-        
+
         return audio
-    
+
     def _apply_equal_loudness(self, audio: np.ndarray) -> np.ndarray:
         """Apply ISO-226 equal-loudness filter"""
         # Get or compute equal loudness filter taps
@@ -838,34 +838,34 @@ def _get_efficient_randn(self):
                 _CACHED_EQUAL_LOUDNESS[cache_key] = equal_loudness_taps
             else:
                 equal_loudness_taps = _CACHED_EQUAL_LOUDNESS[cache_key]
-        
+
         # Apply filter using FFT convolution for efficiency
         if _HAS_TORCHAUDIO and _HAS_TORCH:
             import torch
             import torchaudio.prototype.functional as F
-            
+
             # Convert to torch tensors
             audio_tensor = torch.tensor(audio.astype(np.float32))
             taps_tensor = torch.tensor(equal_loudness_taps.astype(np.float32))
-            
+
             # Apply FFT convolution
             filtered_audio = F.fftconvolve(audio_tensor, taps_tensor, mode='same').numpy()
         else:
             # Fallback to scipy
             filtered_audio = signal.fftconvolve(audio, equal_loudness_taps, mode='same')
-        
+
         # No normalization - preserve the loudness relationships
         return filtered_audio
-    
+
     def generate_white_noise(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate enhanced white noise with natural texture.
         Uses high-quality RNG and optional Perlin noise.
-        
+
         Args:
             duration_seconds: Length of the sound in seconds
             **kwargs: Additional parameters
-            
+
         Returns:
             White noise array
         """
@@ -879,9 +879,9 @@ def _get_efficient_randn(self):
             if self.use_perlin and HAS_PERLIN:
                 # Use Perlin noise for a more organic texture
                 noise_array = generate_perlin_noise(
-                    self.sample_rate, 
-                    duration_seconds, 
-                    octaves=6, 
+                    self.sample_rate,
+                    duration_seconds,
+                    octaves=6,
                     persistence=0.7,
                     seed=self.seed
                 )
@@ -917,7 +917,7 @@ def _get_efficient_randn(self):
             noise_array = noise_array * modulated_noise
 
             return noise_array
-            
+
         except Exception as e:
             logger.error(f"Error generating white noise: {e}")
             # Fallback to simple white noise
@@ -927,80 +927,80 @@ def _get_efficient_randn(self):
         """
         Generate white noise in chunks for very long durations.
         Optionally stream directly to disk for memory-constrained environments.
-        
+
         Args:
             duration_seconds: Length of the sound in seconds
             stream_to_disk: Whether to stream audio directly to disk rather than holding in memory
             **kwargs: Additional parameters
-            
+
         Returns:
             Union[np.ndarray, str]: Generated noise array, or path to the file if stream_to_disk=True
         """
         # Calculate total samples
         total_samples = int(duration_seconds * self.sample_rate)
-        
+
         # Check if we should stream to disk for memory efficiency
         if stream_to_disk and _SOUNDFILE_AVAILABLE:
             try:
                 import soundfile as sf
                 import tempfile
-                
+
                 # Create a temporary file with unique name
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                     temp_path = tmp_file.name
-                
+
                 # Open the file for writing
-                with sf.SoundFile(temp_path, 'w', 
+                with sf.SoundFile(temp_path, 'w',
                                  samplerate=self.sample_rate,
-                                 channels=1, 
+                                 channels=1,
                                  format='WAV',
                                  subtype='FLOAT') as f:
-                    
+
                     # Process in chunks
                     chunk_seconds = PerformanceConstants.FFT_CHUNK_SIZE_SECONDS
                     chunk_samples = int(chunk_seconds * self.sample_rate)
                     crossfade_samples = int(PerformanceConstants.CROSSFADE_BETWEEN_CHUNKS_SECONDS * self.sample_rate)
-                    
+
                     # Calculate number of chunks
                     num_chunks = (total_samples + chunk_samples - 1) // chunk_samples
-                    
+
                     logger.info(f"Generating white noise in {num_chunks} chunks, streaming to disk")
-                    
+
                     # Initialize previous chunk for crossfading
                     prev_chunk_end = None
-                    
+
                     # Process each chunk
                     for i in range(num_chunks):
                         # Calculate chunk boundaries
                         start_idx = i * chunk_samples
                         end_idx = min(start_idx + chunk_samples, total_samples)
                         chunk_duration = (end_idx - start_idx) / self.sample_rate
-                        
+
                         # Log progress periodically
                         if i % max(1, num_chunks // 10) == 0 or i == num_chunks - 1:
                             logger.info(f"Generating chunk {i+1}/{num_chunks} ({int(100*(i+1)/num_chunks)}%)")
-                        
+
                         # Generate this chunk with extra samples for crossfade if not the last chunk
                         if i < num_chunks - 1:
                             current_duration = chunk_duration + crossfade_samples / self.sample_rate
                         else:
                             current_duration = chunk_duration
-                        
+
                         # Call the non-chunked method to generate a single chunk
                         chunk = self.generate_white_noise(current_duration, **kwargs)
-                        
+
                         # Apply crossfade if not the first chunk
                         if i > 0 and prev_chunk_end is not None:
                             # Create crossfade weights
                             fade_in = np.linspace(0, 1, crossfade_samples)
                             fade_out = 1 - fade_in
-                            
+
                             # Apply crossfade
                             crossfaded = prev_chunk_end * fade_out + chunk[:crossfade_samples] * fade_in
-                            
+
                             # Write the crossfaded section
                             f.write(crossfaded)
-                            
+
                             # Write the rest of the chunk
                             if i < num_chunks - 1:
                                 f.write(chunk[crossfade_samples:-crossfade_samples])
@@ -1015,78 +1015,78 @@ def _get_efficient_randn(self):
                                 prev_chunk_end = chunk[-crossfade_samples:]
                             else:
                                 f.write(chunk)
-                
+
                 # Return the path to the file
                 logger.info(f"White noise written to temporary file: {temp_path}")
                 return temp_path
-                
+
             except Exception as e:
                 logger.error(f"Error streaming to disk: {e}")
                 # Fall back to in-memory processing if streaming fails
                 logger.warning("Falling back to in-memory processing")
-        
+
         try:
             # Process in chunks
             chunk_seconds = PerformanceConstants.FFT_CHUNK_SIZE_SECONDS
             chunk_samples = int(chunk_seconds * self.sample_rate)
             crossfade_samples = int(PerformanceConstants.CROSSFADE_BETWEEN_CHUNKS_SECONDS * self.sample_rate)
-            
+
             # Calculate number of chunks
             num_chunks = (total_samples + chunk_samples - 1) // chunk_samples
-            
+
             # Create result array
             result = np.zeros(total_samples)
-            
+
             logger.info(f"Generating white noise in {num_chunks} chunks")
-            
+
             # Process each chunk
             for i in range(num_chunks):
                 # Calculate chunk boundaries with overlap for crossfade
                 start_idx = i * chunk_samples
                 end_idx = min(start_idx + chunk_samples + crossfade_samples, total_samples)
                 chunk_duration = (end_idx - start_idx) / self.sample_rate
-                
+
                 # Log progress periodically
                 if i % max(1, num_chunks // 10) == 0 or i == num_chunks - 1:
                     logger.info(f"Generating chunk {i+1}/{num_chunks} ({int(100*(i+1)/num_chunks)}%)")
-                
+
                 # Generate this chunk with a different seed for each chunk
                 chunk_seed = self.seed + i if self.seed is not None else None
                 # Temporarily adjust our seed for this chunk
                 original_seed = self.seed
                 self.seed = chunk_seed
-                
+
                 # Call the non-chunked method
                 chunk = self.generate_white_noise(chunk_duration, **kwargs)
-                
+
                 # Restore original seed
                 self.seed = original_seed
-                
+
                 # Apply crossfade if not the first chunk
                 if i > 0:
                     # Overlap with previous chunk
                     overlap_start = start_idx
                     overlap_end = min(start_idx + crossfade_samples, total_samples)
-                    
+
                     # Create crossfade weights
                     fade_in = np.linspace(0, 1, overlap_end - overlap_start)
                     fade_out = 1 - fade_in
-                    
+
                     # Apply crossfade
                     result[overlap_start:overlap_end] = (
-                        result[overlap_start:overlap_end] * fade_out + 
+                        result[overlap_start:overlap_end] * fade_out +
                         chunk[:overlap_end - overlap_start] * fade_in
                     )
-                    
+
                     # Add the non-overlapping part
                     if overlap_end < end_idx:
                         result[overlap_end:end_idx] = chunk[overlap_end - overlap_start:end_idx - overlap_start]
                 else:
                     # First chunk, no crossfade needed
                     result[start_idx:end_idx] = chunk[:end_idx - start_idx]
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error generating chunked white noise: {e}")
             # Fall back to simple white noise - might be shorter than requested if we can't generate the full duration
@@ -1099,16 +1099,16 @@ def _get_efficient_randn(self):
         Generate pink noise using recursive IIR filter.
         This creates an accurate 1/f spectrum and is suitable for real-time processing.
         Based on Robert Bristow-Johnson's audio EQ cookbook and the Kellet/Voss algorithm.
-        
+
         Args:
             duration_seconds: Length of the sound in seconds
             **kwargs: Additional parameters
-            
+
         Returns:
             Pink noise array
         """
         samples = int(duration_seconds * self.sample_rate)
-        
+
         try:
             # Use high-quality RNG for white noise
             # Use efficient RNG with CPU output
@@ -1116,25 +1116,25 @@ def _get_efficient_randn(self):
             if samples > 1_048_576:  # About 20 seconds at 48kHz
                 chunk_size = 1_048_576
                 white = np.zeros(samples, dtype=np.float32)
-                
+
                 for offset in range(0, samples, chunk_size):
                     end = min(offset + chunk_size, samples)
                     length = end - offset
                     white[offset:end] = self._randn_cpu(length, mean=0, std=1.0)
             else:
                 white = self._randn_cpu(samples, mean=0, std=1.0)
-            
+
             # Coefficients for Paul Kellet's 7-pole pink noise filter
             # This gives better accuracy than the simplified version
             b = [0.99886, -1.99543, 0.98639, -0.97182, 0.95400, -0.93254]
             a = [1.0, -1.99772, 0.99733, -0.99518, 0.99222, -0.98848]
-            
+
             # Apply IIR filter efficiently using scipy.signal.lfilter
             pink_noise = signal.lfilter(b, a, white)
-            
+
             # Normalize
             pink_noise = 0.5 * pink_noise / np.std(pink_noise)
-            
+
             # Apply subtle dynamic modulation to prevent fatigue
             modulated_noise = generate_dynamic_modulation(
                 self.sample_rate,
@@ -1144,28 +1144,28 @@ def _get_efficient_randn(self):
                 seed=self.seed
             )
             pink_noise = pink_noise * modulated_noise
-            
+
             return pink_noise
-            
+
         except Exception as e:
             logger.error(f"Error generating pink noise (IIR): {e}")
             # Fall back to FFT-based implementation
             return self.generate_pink_noise_fft(duration_seconds, **kwargs)
-    
+
     def generate_pink_noise_fft(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate pink noise using FFT-based spectral shaping.
         This creates more accurate 1/f spectrum than filtered white noise.
-        
+
         Args:
             duration_seconds: Length of the sound in seconds
             **kwargs: Additional parameters
-            
+
         Returns:
             Pink noise array
         """
         samples = int(duration_seconds * self.sample_rate)
-        
+
         # For very long durations, process in chunks
         if samples > PerformanceConstants.MAX_DURATION_SECONDS_BEFORE_CHUNKING * self.sample_rate:
             return self._generate_noise_fft_chunked(duration_seconds, noise_type="pink", **kwargs)
@@ -1174,9 +1174,9 @@ def _get_efficient_randn(self):
             # Start with white noise using high-quality RNG
             if self.use_perlin and HAS_PERLIN:
                 white = generate_perlin_noise(
-                    self.sample_rate, 
-                    duration_seconds, 
-                    octaves=6, 
+                    self.sample_rate,
+                    duration_seconds,
+                    octaves=6,
                     persistence=0.7,
                     seed=self.seed
                 )
@@ -1193,7 +1193,7 @@ def _get_efficient_randn(self):
             # Create 1/f filter (pink noise has energy proportional to 1/f)
             # Add small constant to avoid division by zero
             pink_filter = 1 / np.sqrt(freqs + 1e-6)
-            
+
             # Set DC component to avoid extreme low frequency boost
             pink_filter[0] = pink_filter[1]
 
@@ -1219,7 +1219,7 @@ def _get_efficient_randn(self):
             pink_noise = pink_noise * modulated_noise
 
             return pink_noise
-            
+
         except Exception as e:
             logger.error(f"Error generating pink noise: {e}")
             # Fallback to simple noise
@@ -1230,16 +1230,16 @@ def _get_efficient_randn(self):
         Generate brown/red noise using a recursive IIR filter.
         Brown noise has energy proportional to 1/f²
         This approach is suitable for real-time processing.
-        
+
         Args:
             duration_seconds: Length of the sound in seconds
             **kwargs: Additional parameters
-            
+
         Returns:
             Brown noise array
         """
         samples = int(duration_seconds * self.sample_rate)
-        
+
         try:
             # Use high-quality RNG for white noise
             if self._using_gpu:
@@ -1247,7 +1247,7 @@ def _get_efficient_randn(self):
                 import cupy as cp
                 chunk_size = min(samples, 1_048_576)  # 1M samples per chunk (about 20 seconds at 48kHz)
                 white = np.zeros(samples, dtype=np.float32)
-                
+
                 for offset in range(0, samples, chunk_size):
                     end = min(offset + chunk_size, samples)
                     length = end - offset
@@ -1258,23 +1258,23 @@ def _get_efficient_randn(self):
             else:
                 # NumPy CPU path
                 white = self._rng.normal(0, 1.0, samples)
-            
+
             # Simple yet effective leaky integrator (first-order IIR filter)
             # Used scipy.signal.lfilter for efficiency
             a = 0.99  # Leaky integrator coefficient
-            
+
             # Apply IIR filter - [1-a] is the feed-forward coefficient, [1, -a] is feedback
             # This is a simple one-pole filter
             brown_noise = signal.lfilter([1-a], [1, -a], white)
-            
+
             # Apply high-pass filter to avoid DC build-up
             # Simple first-order high-pass using scipy.signal.lfilter
             hp_a = 0.995  # Very close to 1 for gentle high-pass (~0.5 Hz at 48 kHz)
             brown_noise = signal.lfilter([1, -1], [1, -hp_a], brown_noise)
-            
+
             # Normalize
             brown_noise = 0.5 * brown_noise / np.std(brown_noise)
-            
+
             # Apply subtle dynamic modulation to prevent fatigue
             modulated_noise = generate_dynamic_modulation(
                 self.sample_rate,
@@ -1284,28 +1284,28 @@ def _get_efficient_randn(self):
                 seed=self.seed
             )
             brown_noise = brown_noise * modulated_noise
-            
+
             return brown_noise
-            
+
         except Exception as e:
             logger.error(f"Error generating brown noise (IIR): {e}")
             # Fall back to FFT-based implementation
             return self.generate_brown_noise_fft(duration_seconds, **kwargs)
-    
+
     def generate_brown_noise_fft(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate brown/red noise using FFT-based spectral shaping.
         Brown noise has energy proportional to 1/f²
-        
+
         Args:
             duration_seconds: Length of the sound in seconds
             **kwargs: Additional parameters
-            
+
         Returns:
             Brown noise array
         """
         samples = int(duration_seconds * self.sample_rate)
-        
+
         # For very long durations, process in chunks
         if samples > PerformanceConstants.MAX_DURATION_SECONDS_BEFORE_CHUNKING * self.sample_rate:
             return self._generate_noise_fft_chunked(duration_seconds, noise_type="brown", **kwargs)
@@ -1314,9 +1314,9 @@ def _get_efficient_randn(self):
             # Start with white noise using high-quality RNG
             if self.use_perlin and HAS_PERLIN:
                 white = generate_perlin_noise(
-                    self.sample_rate, 
-                    duration_seconds, 
-                    octaves=6, 
+                    self.sample_rate,
+                    duration_seconds,
+                    octaves=6,
                     persistence=0.7,
                     seed=self.seed
                 )
@@ -1338,7 +1338,7 @@ def _get_efficient_randn(self):
             # Create 1/f² filter (brown noise has energy proportional to 1/f²)
             # Add small constant to avoid division by zero
             brown_filter = 1 / (freqs + 1e-6)
-            
+
             # Set DC component to avoid extreme low frequency boost
             brown_filter[0] = brown_filter[1]
 
@@ -1364,7 +1364,7 @@ def _get_efficient_randn(self):
             brown_noise = brown_noise * modulated_noise
 
             return brown_noise
-            
+
         except Exception as e:
             logger.error(f"Error generating brown noise: {e}")
             # Fallback to simple noise with low-pass filter
@@ -1376,59 +1376,59 @@ def _get_efficient_randn(self):
                 return filtered
             except:
                 return fallback
-        
+
     def _generate_noise_fft_chunked(self, duration_seconds: int, noise_type: str, **kwargs) -> np.ndarray:
         """Generate colored noise in chunks for very long durations."""
         # Calculate total samples
         total_samples = int(duration_seconds * self.sample_rate)
-        
+
         try:
             # Process in chunks
             chunk_seconds = PerformanceConstants.FFT_CHUNK_SIZE_SECONDS
             chunk_samples = int(chunk_seconds * self.sample_rate)
             crossfade_samples = int(PerformanceConstants.CROSSFADE_BETWEEN_CHUNKS_SECONDS * self.sample_rate)
-            
+
             # Calculate number of chunks
             num_chunks = (total_samples + chunk_samples - 1) // chunk_samples
-            
+
             # Create result array
             result = np.zeros(total_samples)
-            
+
             logger.info(f"Generating {noise_type} noise in {num_chunks} chunks of {chunk_seconds}s each")
-            
+
             # Process each chunk
             for i in range(num_chunks):
                 # Calculate chunk boundaries with overlap for crossfade
                 start_idx = i * chunk_samples
                 end_idx = min(start_idx + chunk_samples + crossfade_samples, total_samples)
                 chunk_duration = (end_idx - start_idx) / self.sample_rate
-                
+
                 # Log progress periodically
                 if i % max(1, num_chunks // 10) == 0 or i == num_chunks - 1:
                     logger.info(f"Generating chunk {i+1}/{num_chunks} ({int(100*(i+1)/num_chunks)}%)")
-                
+
                 # Generate this chunk based on noise type - with a different seed for each chunk
                 chunk_seed = self.seed + i if self.seed is not None else None
                 # Temporarily adjust our seed for this chunk
                 original_seed = self.seed
                 self.seed = chunk_seed
-                
+
                 # Call the non-chunked functions directly to avoid recursion stack overflow
                 chunk_samples = int(chunk_duration * self.sample_rate)
-                
+
                 # Start with white noise
                 if self.use_perlin and HAS_PERLIN:
                     white = generate_perlin_noise(
-                        self.sample_rate, 
-                        chunk_duration, 
-                        octaves=6, 
+                        self.sample_rate,
+                        chunk_duration,
+                        octaves=6,
                         persistence=0.7,
                         seed=self.seed
                     )
                 else:
                     # Use efficient RNG with CPU output
                     white = self._randn_cpu(chunk_samples, mean=0, std=0.5)
-                
+
                 # Process based on noise type
                 if noise_type == "pink":
                     # FFT to frequency domain
@@ -1445,7 +1445,7 @@ def _get_efficient_randn(self):
                     # Back to time domain
                     chunk = np.fft.irfft(X_pink, n=chunk_samples)
                     chunk = 0.95 * chunk / np.max(np.abs(chunk))
-                    
+
                 elif noise_type == "brown":
                     # FFT to frequency domain
                     X = np.fft.rfft(white)
@@ -1461,11 +1461,11 @@ def _get_efficient_randn(self):
                     # Back to time domain
                     chunk = np.fft.irfft(X_brown, n=chunk_samples)
                     chunk = 0.95 * chunk / np.max(np.abs(chunk))
-                    
+
                 else:  # white noise
                     # For white noise, just use the generated noise
                     chunk = white
-                
+
                 # Apply subtle dynamic modulation to prevent fatigue
                 modulated_noise = generate_dynamic_modulation(
                     self.sample_rate,
@@ -1475,37 +1475,37 @@ def _get_efficient_randn(self):
                     seed=self.seed
                 )
                 chunk = chunk * modulated_noise
-                
+
                 # Restore original seed
                 self.seed = original_seed
-                
+
                 # Apply crossfade if not the first chunk
                 if i > 0:
                     # Overlap with previous chunk
                     overlap_start = start_idx
                     overlap_end = min(start_idx + crossfade_samples, total_samples)
-                    
+
                     # Only proceed if overlap region exists
                     if overlap_end > overlap_start:
                         # Create crossfade weights
                         fade_in = np.linspace(0, 1, overlap_end - overlap_start)
                         fade_out = 1 - fade_in
-                        
+
                         # Apply crossfade
                         result[overlap_start:overlap_end] = (
-                            result[overlap_start:overlap_end] * fade_out + 
+                            result[overlap_start:overlap_end] * fade_out +
                             chunk[:overlap_end - overlap_start] * fade_in
                         )
-                        
+
                         # Add the non-overlapping part
                         if overlap_end < end_idx:
                             result[overlap_end:end_idx] = chunk[overlap_end - overlap_start:end_idx - overlap_start]
                 else:
                     # First chunk, no crossfade needed
                     result[start_idx:end_idx] = chunk[:end_idx - start_idx]
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error generating chunked {noise_type} noise: {e}")
             # Fall back to simple noise
@@ -1513,11 +1513,11 @@ def _get_efficient_randn(self):
             logger.warning(f"Falling back to {fallback_duration}s of simple noise")
             return self.random_state.normal(0, 0.5, int(fallback_duration * self.sample_rate))
 
-    def export_master(self, audio: np.ndarray, path: str, format: str = 'wav', 
+    def export_master(self, audio: np.ndarray, path: str, format: str = 'wav',
                     target_lufs: float = -23, lra: float = 7, true_peak: float = -3) -> str:
         """
         Export the audio with proper loudness normalization using FFmpeg.
-        
+
         Args:
             audio: Audio array to export
             path: Output file path
@@ -1525,7 +1525,7 @@ def _get_efficient_randn(self):
             target_lufs: Target integrated loudness in LUFS
             lra: Target loudness range in LU
             true_peak: Target maximum true peak in dBTP
-            
+
         Returns:
             Path to the exported file
         """
@@ -1533,12 +1533,12 @@ def _get_efficient_randn(self):
         global _SOUNDFILE_AVAILABLE
         if not _SOUNDFILE_AVAILABLE:
             _try_import_dependencies()
-        
+
         try:
             # Create a temporary file
             with tempfile.NamedTemporaryFile(suffix=f".{format}", delete=False) as tmp_file:
                 temp_path = tmp_file.name
-            
+
             # Save audio to temporary file with 24-bit or 32-bit float precision
             if _SOUNDFILE_AVAILABLE:
                 import soundfile as sf
@@ -1549,7 +1549,7 @@ def _get_efficient_randn(self):
                 from scipy.io import wavfile
                 # Convert to 32-bit float for maximum precision
                 wavfile.write(temp_path, self.sample_rate, audio.astype(np.float32))
-            
+
             # Construct FFmpeg command
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -1561,14 +1561,14 @@ def _get_efficient_randn(self):
                 "-b:a", "320k" if format == 'mp3' else None,  # Bitrate for MP3
                 path  # Output file
             ]
-            
+
             # Remove None values
             ffmpeg_cmd = [arg for arg in ffmpeg_cmd if arg is not None]
-            
+
             # Run FFmpeg
             logger.info(f"Running FFmpeg for loudness normalization: {' '.join(ffmpeg_cmd)}")
             result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-            
+
             # Check for errors
             if result.returncode != 0:
                 logger.error(f"FFmpeg error: {result.stderr}")
@@ -1582,15 +1582,15 @@ def _get_efficient_randn(self):
                 loudness_info = [line for line in result.stderr.split('\n') if 'loudnorm' in line]
                 for line in loudness_info:
                     logger.info(line)
-            
+
             # Clean up temp file
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
-            
+
             return path
-            
+
         except Exception as e:
             logger.error(f"Error exporting audio: {e}")
             # Try direct export without normalization as fallback
@@ -1608,3 +1608,13 @@ def _get_efficient_randn(self):
             except Exception as e2:
                 logger.error(f"Error in fallback export: {e2}")
                 return ""
+
+    def sanitize_audio(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Sanitize audio array (placeholder implementation).
+        This can be extended to clip, check for NaNs, or enforce dtype.
+        """
+        # Example: remove NaNs/Infs and clip to [-1, 1]
+        audio = np.nan_to_num(audio, nan=0.0, posinf=1.0, neginf=-1.0)
+        return np.clip(audio, -1.0, 1.0)
+    
