@@ -17,7 +17,7 @@ from utils.optional_imports import HAS_PERLIN
 from utils.perlin_utils import generate_perlin_noise, apply_modulation, generate_dynamic_modulation
 from utils.random_state import RandomStateManager
 from models.constants import PerformanceConstants, Constants
-from models.enums import NoiseColor
+from models.constants import NoiseColor
 
 logger = logging.getLogger("BabySleepSoundGenerator")
 
