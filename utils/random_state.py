@@ -45,7 +45,16 @@ class RandomStateManager:
         self.seed = seed if seed is not None else random.randint(0, 2**32 - 1)
         logger.info(f"Initializing random state with seed: {self.seed}")
         self._random = random.Random(self.seed)
-        self._numpy_random = np.random.RandomState(self.seed)
+        
+        # Try to use Philox for higher quality random numbers
+        try:
+            from numpy.random import Generator, Philox
+            self._numpy_random = Generator(Philox(self.seed))
+            logger.info("Using high-quality Philox RNG")
+        except (ImportError, AttributeError):
+            # Fall back to standard RandomState if Philox not available
+            logger.info("Philox RNG not available, using standard NumPy RandomState")
+            self._numpy_random = np.random.RandomState(self.seed)
         
     def set_seed(self, seed):
         """
@@ -56,7 +65,13 @@ class RandomStateManager:
         """
         self.seed = seed
         self._random.seed(seed)
-        self._numpy_random.seed(seed)
+        
+        # Reset NumPy RNG with the new seed
+        try:
+            from numpy.random import Generator, Philox
+            self._numpy_random = Generator(Philox(self.seed))
+        except (ImportError, AttributeError):
+            self._numpy_random = np.random.RandomState(self.seed)
         
     def randint(self, a, b):
         """
@@ -138,7 +153,7 @@ class RandomStateManager:
         Returns:
             Array of random numbers
         """
-        return self._numpy_random.randn(*args)
+        return self._numpy_random.standard_normal(size=args)
     
     def uniform(self, low=0.0, high=1.0, size=None):
         """
