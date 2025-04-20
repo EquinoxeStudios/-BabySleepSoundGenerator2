@@ -791,24 +791,24 @@ class NoiseGenerator(SoundProfileGenerator):
             return np.zeros(int(duration_seconds * self.sample_rate))
     
 def _get_efficient_randn(self):
-        """Return a function that efficiently generates random numbers on CPU"""
-        if self._using_gpu:
-            import cupy as cp
-            # Capture the current RNG in a local variable to avoid thread issues
-            rng = self._rng
-            # Create a closure that handles the GPU->CPU transfer efficiently
-            def randn_cpu(n, mean=0.0, std=1.0):
-                noise = rng.normal(mean, std, n, dtype=cp.float32)
-                return cp.asnumpy(noise)
-            return randn_cpu
-        else:
-            # Capture the current RNG in a local variable to avoid thread issues
-            rng = self._rng
-            # For CPU, just return a function that calls the RNG directly
-            def randn_cpu(n, mean=0.0, std=1.0):
-                return rng.normal(mean, std, n)
-            return randn_cpu
-    
+    """Return a function that efficiently generates random numbers on CPU"""
+    if self._using_gpu:
+        import cupy as cp
+        # Capture the current RNG in a local variable to avoid thread issues
+        rng = self._rng
+        # Create a closure that handles the GPU->CPU transfer efficiently
+        def randn_cpu(n, mean=0.0, std=1.0):
+            noise = rng.normal(mean, std, n, dtype=cp.float32)
+            return cp.asnumpy(noise)
+        return randn_cpu
+    else:
+        # Capture the current RNG in a local variable to avoid thread issues
+        rng = self._rng
+        # For CPU, just return a function that calls the RNG directly
+        def randn_cpu(n, mean=0.0, std=1.0):
+            return rng.normal(mean, std, n)
+        return randn_cpu
+
     def _apply_filters(self, audio: np.ndarray) -> np.ndarray:
         """Apply DC removal and anti-aliasing filters"""
         # Get or design filters
