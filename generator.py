@@ -65,6 +65,10 @@ class BabySleepSoundGenerator:
         room_simulation: bool = True,
         config_file: Optional[str] = None,
         seed: Optional[int] = None,
+        use_equal_loudness: bool = True,
+        use_limiter: bool = True,
+        use_organic_drift: bool = True,
+        use_diffusion: bool = False,
     ):
         """Initialize the generator with professional audio quality settings"""
         # Load configuration if provided
@@ -96,6 +100,12 @@ class BabySleepSoundGenerator:
         self.use_hrtf = use_hrtf and HAS_LIBROSA
         self.room_simulation = room_simulation and HAS_PYROOMACOUSTICS
 
+        # Store new noise enhancement parameters
+        self.use_equal_loudness = use_equal_loudness
+        self.use_limiter = use_limiter
+        self.use_organic_drift = use_organic_drift
+        self.use_diffusion = use_diffusion
+
         # Set modulation parameters for natural variation
         self.use_dynamic_modulation = True
         self.modulation_depth = 0.08  # 8% variation
@@ -124,24 +134,28 @@ class BabySleepSoundGenerator:
         # Initialize component generators using the factory pattern
         try:
             self.noise_generator = SoundGeneratorFactory.create_generator(
-                "noise", 
-                sample_rate, 
-                self.use_perlin, 
-                modulation_depth=self.modulation_depth, 
-                seed=self.seed
+                "noise",
+                sample_rate,
+                self.use_perlin,
+                modulation_depth=self.modulation_depth,
+                seed=self.seed,
+                use_equal_loudness=self.use_equal_loudness,
+                use_limiter=self.use_limiter,
+                use_organic_drift=self.use_organic_drift,
+                use_diffusion=self.use_diffusion
             )
             
             self.natural_generator = SoundGeneratorFactory.create_generator(
-                "natural", 
-                sample_rate, 
-                self.use_perlin, 
+                "natural",
+                sample_rate,
+                self.use_perlin,
                 seed=self.seed
             )
             
             self.womb_generator = SoundGeneratorFactory.create_generator(
-                "womb", 
-                sample_rate, 
-                self.use_perlin, 
+                "womb",
+                sample_rate,
+                self.use_perlin,
                 seed=self.seed
             )
         except Exception as e:
@@ -1288,6 +1302,11 @@ class BabySleepSoundGenerator:
         dynamic_volume: bool = False,
         frequency_emphasis_params: Optional[Dict[str, Any]] = None,
         low_pass_filter_hz: Optional[float] = None,
+        # New noise enhancement parameters
+        use_equal_loudness: bool = True,
+        use_limiter: bool = True,
+        use_organic_drift: bool = True,
+        use_diffusion: bool = False,
         progress_callback = None,
     ) -> Optional[str]:
         """
@@ -1323,11 +1342,18 @@ class BabySleepSoundGenerator:
             logger.error(error_msg)
             raise ValueError(error_msg)
             
+        # Pass new noise enhancement parameters to the noise generator if applicable
+        if primary_noise in ["white", "pink", "brown"]:
+            self.noise_generator.use_equal_loudness = use_equal_loudness
+            self.noise_generator.use_limiter = use_limiter
+            self.noise_generator.use_organic_drift = use_organic_drift
+            self.noise_generator.use_diffusion = use_diffusion
+
         # Create progress reporter
         total_steps = 10  # Approximate number of major steps
         progress = ProgressReporter(
-            total_steps, 
-            f"Generating custom {primary_noise} sound", 
+            total_steps,
+            f"Generating custom {primary_noise} sound",
             progress_callback
         )
 

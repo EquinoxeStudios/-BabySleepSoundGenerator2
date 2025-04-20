@@ -284,21 +284,15 @@ def main():
         use_hrtf=not args.disable_hrtf,
         room_simulation=not args.disable_room_simulation,
         seed=args.seed,
+        use_equal_loudness=not args.disable_equal_loudness,
+        use_limiter=not args.disable_limiter,
+        use_organic_drift=not args.disable_organic_drift,
+        use_diffusion=args.enable_diffusion
     )
 
     # Apply settings
     if args.disable_modulation:
         generator.use_dynamic_modulation = False
-        
-    # Apply enhanced noise generator settings
-    if args.disable_equal_loudness:
-        generator.use_equal_loudness = False
-    if args.disable_organic_drift:
-        generator.use_organic_drift = False
-    if args.disable_limiter:
-        generator.use_limiter = False
-    if args.enable_diffusion:
-        generator.use_diffusion = True
 
     if args.mode == "list":
         display_available_options(generator)

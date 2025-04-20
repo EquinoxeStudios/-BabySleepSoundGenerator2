@@ -106,6 +106,22 @@ class SpatialConstants:
     DEFAULT_STEREO_WIDTH = 0.5
 
 
+class NoiseEnhancementConstants:
+    """Constants for enhanced noise generation features"""
+    DEFAULT_EQUAL_LOUDNESS_LEVEL = 50  # ISO-226 equal loudness curve at 50 dB
+    DEFAULT_LIMITER_THRESHOLD_DB = -10.0
+    DEFAULT_LIMITER_KNEE_DB = 6.0
+    DEFAULT_LIMITER_ATTACK_MS = 5.0
+    DEFAULT_LIMITER_RELEASE_MS = 50.0
+    DEFAULT_LIMITER_LOOKAHEAD_MS = 10.0
+    DEFAULT_ORGANIC_DRIFT_BANDS = 10
+    DEFAULT_ORGANIC_DRIFT_MIN_FREQ = 20
+    DEFAULT_ORGANIC_DRIFT_MAX_FREQ = 20000
+    DEFAULT_DIFFUSION_STRENGTH = 0.5
+    DEFAULT_FADE_IN_SECONDS = 10.0
+    DEFAULT_FADE_OUT_SECONDS = 60.0
+
+
 class NoiseColor(str, Enum):
     """Enumeration of noise colors"""
     WHITE = "white"

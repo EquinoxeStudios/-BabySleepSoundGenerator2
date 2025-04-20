@@ -9,6 +9,7 @@ import json
 import logging
 
 from models.constants import Constants, FrequencyFocus, RoomSize, OutputFormat
+from models.constants import NoiseEnhancementConstants
 
 logger = logging.getLogger("BabySleepSoundGenerator")
 
@@ -59,6 +60,20 @@ class SoundConfiguration:
     seed: Optional[int] = None  # Random seed for reproducibility
     render_visualization: bool = False
     
+    # Enhanced noise options
+    use_equal_loudness: bool = True
+    use_organic_drift: bool = True
+    use_limiter: bool = True
+    use_diffusion: bool = False
+
+    # Optional parameters for fine-tuning
+    equal_loudness_level: int = NoiseEnhancementConstants.DEFAULT_EQUAL_LOUDNESS_LEVEL
+    limiter_threshold_db: float = NoiseEnhancementConstants.DEFAULT_LIMITER_THRESHOLD_DB
+    limiter_knee_db: float = NoiseEnhancementConstants.DEFAULT_LIMITER_KNEE_DB
+    diffusion_strength: float = NoiseEnhancementConstants.DEFAULT_DIFFUSION_STRENGTH
+    fade_in_seconds: float = NoiseEnhancementConstants.DEFAULT_FADE_IN_SECONDS
+    fade_out_seconds: float = NoiseEnhancementConstants.DEFAULT_FADE_OUT_SECONDS
+
     @classmethod
     def from_preset(cls, preset_name: str):
         """
