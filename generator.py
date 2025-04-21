@@ -295,15 +295,7 @@ class BabySleepSoundGenerator:
     ) -> np.ndarray:
         """
         Mix multiple sound arrays together with specified mix ratios.
-
-        Args:
-            primary: Primary sound array
-            overlays: List of overlay sound arrays
-            mix_ratios: List of mix ratios for each overlay
-            motion_smoothing: Optional parameters for smooth transitions
-
-        Returns:
-            Mixed audio array
+        Uses in-place operations where possible to reduce memory usage.
         """
         if not overlays or not mix_ratios:
             return primary
@@ -315,8 +307,14 @@ class BabySleepSoundGenerator:
         # Check if primary is stereo
         is_stereo = len(primary.shape) > 1
 
-        # Start with the primary sound
+        # Create a copy only once at the beginning
         mixed = primary.copy()
+
+        # Pre-allocate a stereo buffer for mono-to-stereo conversion if needed
+        stereo_buffer = None
+        if is_stereo:
+            channels = primary.shape[1]
+            stereo_buffer = np.zeros((0, channels))  # Empty buffer, will resize as needed
 
         # Add each overlay with its mix ratio
         for i, (overlay, ratio) in enumerate(zip(overlays, mix_ratios)):
@@ -327,114 +325,69 @@ class BabySleepSoundGenerator:
                 
             # Handle shape conversion properly
             if len(overlay.shape) == 1 and is_stereo:
-                # Convert mono overlay to stereo
+                # Convert mono overlay to stereo using broadcasting
                 try:
-                    overlay_stereo = np.zeros((len(overlay), primary.shape[1]))
-                    for c in range(primary.shape[1]):
-                        overlay_stereo[:, c] = overlay
-                    overlay = overlay_stereo
+                    # Resize buffer if needed
+                    if len(overlay) > len(stereo_buffer):
+                        stereo_buffer = np.zeros((len(overlay), channels))
+                    
+                    # Use buffer up to required length
+                    buffer_view = stereo_buffer[:len(overlay)]
+                    
+                    # Use broadcasting for efficient assignment
+                    buffer_view[:] = overlay[:, np.newaxis]
+                    overlay_stereo = buffer_view
+                    
+                    # Mix in-place
+                    np.multiply(mixed, (1 - ratio), out=mixed)
+                    np.add(mixed, overlay_stereo * ratio, out=mixed)
                 except Exception as e:
                     logger.error(f"Error converting overlay to stereo: {e}")
                     continue
-            elif len(overlay.shape) > 1 and not is_stereo:
-                # Take only the first channel if primary is mono
+            elif is_stereo and len(overlay.shape) > 1:
+                # Both are stereo, mix in-place
                 try:
-                    overlay = np.mean(overlay, axis=1)  # Average of all channels
+                    # Ensure overlay is the right length
+                    if len(overlay) > len(mixed):
+                        overlay = overlay[:len(mixed)]
+                    elif len(overlay) < len(mixed):
+                        # Skip if too short - would need padding
+                        logger.warning(f"Skipping overlay {i} - too short and would need padding")
+                        continue
+                    
+                    # Mix in-place
+                    np.multiply(mixed, (1 - ratio), out=mixed)
+                    np.add(mixed, overlay * ratio, out=mixed)
                 except Exception as e:
-                    logger.error(f"Error converting stereo overlay to mono: {e}")
+                    logger.error(f"Error mixing stereo overlay {i}: {e}")
                     continue
-
-            # Make sure the overlay is the same length as the primary
-            try:
-                if len(overlay) > len(mixed):
-                    logger.info(f"Truncating overlay {i} from {len(overlay)} to {len(mixed)} samples")
-                    overlay = overlay[: len(mixed)]
-                elif len(overlay) < len(mixed):
-                    # Pad with zeros if necessary
-                    logger.info(f"Padding overlay {i} from {len(overlay)} to {len(mixed)} samples")
-                    if is_stereo and len(overlay.shape) > 1:
-                        overlay = np.pad(overlay, ((0, len(mixed) - len(overlay)), (0, 0)))
-                    else:
-                        overlay = np.pad(overlay, (0, len(mixed) - len(overlay)))
-            except Exception as e:
-                logger.error(f"Error resizing overlay: {e}")
-                continue
-
-            # Apply motion smoothing if requested
-            if motion_smoothing is not None and motion_smoothing.enabled:
-                # Create a smooth crossfade envelope for the overlay
-                transition_samples = int(motion_smoothing.transition_seconds * self.sample_rate)
-
-                # Ensure transition isn't too long compared to audio
-                if transition_samples * 2 > len(mixed):
-                    transition_samples = len(mixed) // 4
-
-                try:
-                    # Create a smooth envelope that gradually increases the overlay
-                    if is_stereo and len(overlay.shape) > 1:
-                        envelope = np.ones((len(mixed), primary.shape[1])) * ratio
-                        
-                        # Apply gradual fade-in at the beginning
-                        fade_in = np.linspace(0, 1, transition_samples)
-                        envelope[:transition_samples] *= fade_in[:, np.newaxis]
-                        
-                        # Apply gradual fade-out at the end
-                        fade_out = np.linspace(1, 0, transition_samples)
-                        envelope[-transition_samples:] *= fade_out[:, np.newaxis]
-                    else:
-                        envelope = np.ones(len(mixed)) * ratio
-                        
-                        # Apply gradual fade-in at the beginning
-                        fade_in = np.linspace(0, 1, transition_samples)
-                        envelope[:transition_samples] *= fade_in
-                        
-                        # Apply gradual fade-out at the end
-                        fade_out = np.linspace(1, 0, transition_samples)
-                        envelope[-transition_samples:] *= fade_out
-
-                    # Apply the smooth mix
-                    if is_stereo and len(overlay.shape) > 1:
-                        mixed = mixed * (1 - envelope) + overlay * envelope
-                    else:
-                        # Handle the case where overlay might be mono
-                        if is_stereo:
-                            # Convert overlay to stereo if needed
-                            for c in range(mixed.shape[1]):
-                                mixed[:, c] = mixed[:, c] * (1 - envelope) + overlay * envelope
-                        else:
-                            mixed = mixed * (1 - envelope) + overlay * envelope
-                except Exception as e:
-                    logger.error(f"Error applying motion smoothing: {e}")
-                    # Fall back to standard mixing
-                    if is_stereo and len(overlay.shape) > 1:
-                        mixed = mixed * (1 - ratio) + overlay * ratio
-                    else:
-                        # Handle the case where overlay might be mono
-                        if is_stereo:
-                            for c in range(mixed.shape[1]):
-                                mixed[:, c] = mixed[:, c] * (1 - ratio) + overlay * ratio
-                        else:
-                            mixed = mixed * (1 - ratio) + overlay * ratio
             else:
-                # Standard mixing with constant ratio
+                # Both are mono or mixed case
                 try:
-                    if is_stereo and len(overlay.shape) > 1:
-                        mixed = mixed * (1 - ratio) + overlay * ratio
+                    # Ensure overlay is the right length
+                    if len(overlay) > len(mixed):
+                        overlay = overlay[:len(mixed)]
+                    elif len(overlay) < len(mixed):
+                        # Skip if too short - would need padding
+                        logger.warning(f"Skipping overlay {i} - too short and would need padding")
+                        continue
+                    
+                    # Mix in-place
+                    if is_stereo:
+                        for c in range(mixed.shape[1]):
+                            np.multiply(mixed[:, c], (1 - ratio), out=mixed[:, c])
+                            np.add(mixed[:, c], overlay * ratio, out=mixed[:, c])
                     else:
-                        # Handle the case where overlay might be mono
-                        if is_stereo:
-                            for c in range(mixed.shape[1]):
-                                mixed[:, c] = mixed[:, c] * (1 - ratio) + overlay * ratio
-                        else:
-                            mixed = mixed * (1 - ratio) + overlay * ratio
+                        np.multiply(mixed, (1 - ratio), out=mixed)
+                        np.add(mixed, overlay * ratio, out=mixed)
                 except Exception as e:
                     logger.error(f"Error mixing overlay {i}: {e}")
                     continue
 
-        # Normalize to prevent clipping
+        # Normalize to prevent clipping (in-place)
         max_val = np.max(np.abs(mixed))
         if max_val > Constants.MAX_AUDIO_VALUE:
-            mixed = mixed / max_val * Constants.MAX_AUDIO_VALUE
+            np.multiply(mixed, Constants.MAX_AUDIO_VALUE / max_val, out=mixed)
 
         return mixed
 
