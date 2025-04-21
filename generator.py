@@ -52,175 +52,22 @@ from utils.parallel import ParallelProcessor
 logger = logging.getLogger("BabySleepSoundGenerator")
 
 
-class BabySleepSoundGenerator:
-    """Generate broadcast-quality sleep sounds for babies based on developmental needs"""
-
-    def __init__(
-        self,
-        sample_rate: int = Constants.DEFAULT_SAMPLE_RATE,
-        bit_depth: int = Constants.DEFAULT_BIT_DEPTH,
-        channels: int = Constants.DEFAULT_CHANNELS,
-        target_loudness: float = Constants.DEFAULT_TARGET_LOUDNESS,
-        use_hrtf: bool = True,
-        room_simulation: bool = True,
-        config_file: Optional[str] = None,
-        seed: Optional[int] = None,
-        use_equal_loudness: bool = True,
-        use_limiter: bool = True,
-        use_organic_drift: bool = True,
-        use_diffusion: bool = False,
-    ):
-        """Initialize the generator with professional audio quality settings"""
-        # Load configuration if provided
-        if config_file:
-            try:
-                self.config = ConfigManager.get_instance(config_file)
-                # Use values from config or fall back to defaults
-                sample_rate = self.config.get_int("DEFAULT", "sample_rate", sample_rate)
-                bit_depth = self.config.get_int("DEFAULT", "bit_depth", bit_depth)
-                channels = self.config.get_int("DEFAULT", "channels", channels)
-                target_loudness = self.config.get_float("DEFAULT", "target_loudness", target_loudness)
-                use_hrtf = self.config.get_bool("DEFAULT", "use_hrtf", use_hrtf)
-                room_simulation = self.config.get_bool("DEFAULT", "room_simulation", room_simulation)
-            except Exception as e:
-                logger.error(f"Error loading configuration: {e}")
-                logger.warning("Using default settings")
-                self.config = None
-        else:
-            self.config = None
+class AudioProcessor:
+    """
+    Handles audio processing operations like fading, mixing, and looping.
+    """
+    
+    def __init__(self, sample_rate: int, crossfade_duration: float = Constants.DEFAULT_CROSSFADE_DURATION):
+        """
+        Initialize the audio processor.
         
-        # Initialize random state manager with the seed
-        self.random_state = RandomStateManager.get_instance(seed)
-        self.seed = self.random_state.seed  # Store the actual seed used
-        
+        Args:
+            sample_rate: Audio sample rate
+            crossfade_duration: Default crossfade duration in seconds
+        """
         self.sample_rate = sample_rate
-        self.bit_depth = bit_depth  # 16, 24, or 32
-        self.channels = channels
-        self.target_loudness = target_loudness  # LUFS
-        self.use_hrtf = use_hrtf and HAS_LIBROSA
-        self.room_simulation = room_simulation and HAS_PYROOMACOUSTICS
-
-        # Store new noise enhancement parameters
-        self.use_equal_loudness = use_equal_loudness
-        self.use_limiter = use_limiter
-        self.use_organic_drift = use_organic_drift
-        self.use_diffusion = use_diffusion
-
-        # Set modulation parameters for natural variation
-        self.use_dynamic_modulation = True
-        self.modulation_depth = 0.08  # 8% variation
-        self.modulation_rate = 0.002  # Very slow modulation (cycles per second)
-        self.use_perlin = HAS_PERLIN  # Use Perlin noise if available
-
-        # Choose appropriate looping method
-        self.looping_method = LoopingMethod.CROSS_CORRELATION
-        self.crossfade_duration = Constants.DEFAULT_CROSSFADE_DURATION
-
-        # Reference volume calibration (mapping normalized values to dB SPL at 1m)
-        # Based on clinical standards for infant sound therapy
-        self.volume_to_db_spl = {
-            0.3: 55.0,  # 55 dB SPL at 1m
-            0.4: 58.0,  # 58 dB SPL at 1m
-            0.5: 62.0,  # 62 dB SPL at 1m
-            0.6: 66.0,  # 66 dB SPL at 1m (AAP max guideline)
-            0.7: 70.0,  # 70 dB SPL at 1m (exceeds AAP guidelines)
-            0.8: 75.0,  # 75 dB SPL at 1m (well above recommendations)
-            0.9: 80.0,  # 80 dB SPL at 1m (excessive)
-        }
-
-        # Safe listening duration at various levels (based on WHO guidelines)
-        self.safe_duration_hours = Constants.WHO_SAFE_HOURS
-
-        # Initialize component generators using the factory pattern
-        try:
-            self.noise_generator = SoundGeneratorFactory.create_generator(
-                "noise",
-                sample_rate,
-                self.use_perlin,
-                modulation_depth=self.modulation_depth,
-                seed=self.seed,
-                use_equal_loudness=self.use_equal_loudness,
-                use_limiter=self.use_limiter,
-                use_organic_drift=self.use_organic_drift,
-                use_diffusion=self.use_diffusion
-            )
-            
-            self.natural_generator = SoundGeneratorFactory.create_generator(
-                "natural",
-                sample_rate,
-                self.use_perlin,
-                seed=self.seed
-            )
-            
-            self.womb_generator = SoundGeneratorFactory.create_generator(
-                "womb",
-                sample_rate,
-                self.use_perlin,
-                seed=self.seed
-            )
-        except Exception as e:
-            logger.error(f"Error initializing sound generators: {e}")
-            raise
-
-        # Initialize processors
-        try:
-            self.spatial_processor = SpatialProcessor(sample_rate, use_hrtf)
-            self.room_processor = RoomAcousticsProcessor(sample_rate, room_simulation)
-            self.frequency_processor = FrequencyProcessor(sample_rate)
-            self.modulation_processor = ModulationProcessor(
-                sample_rate, self.use_perlin, depth=self.modulation_depth, rate=self.modulation_rate
-            )
-            
-            # Initialize effect modules
-            self.breathing_modulator = BreathingModulator(sample_rate, self.use_perlin)
-            self.sleep_cycle_modulator = SleepCycleModulator(sample_rate, self.use_perlin)
-            self.dynamic_volume_processor = DynamicVolumeProcessor(sample_rate, self.volume_to_db_spl)
-            self.reflex_preventer = ReflexPreventer(sample_rate)
-            
-            # Initialize output modules
-            self.loudness_normalizer = LoudnessNormalizer(sample_rate, target_loudness)
-            self.audio_exporter = AudioExporter(sample_rate, bit_depth, channels)
-            self.spectrum_visualizer = SpectrumVisualizer(sample_rate)
-            
-            # Initialize parallel processor
-            self.parallel_processor = ParallelProcessor()
-        except Exception as e:
-            logger.error(f"Error initializing processors: {e}")
-            raise
-        
-        # Define available sound profiles with updated factory pattern
-        self.sound_profiles = {
-            "white": lambda duration_seconds, **kwargs: 
-                self.noise_generator.generate(duration_seconds, sound_type="white", **kwargs),
-            "pink": lambda duration_seconds, **kwargs: 
-                self.noise_generator.generate(duration_seconds, sound_type="pink", **kwargs),
-            "brown": lambda duration_seconds, **kwargs: 
-                self.noise_generator.generate(duration_seconds, sound_type="brown", **kwargs),
-            "womb": lambda duration_seconds, **kwargs: 
-                self.womb_generator.generate(duration_seconds, sound_type="womb", **kwargs),
-            "heartbeat": lambda duration_seconds, **kwargs: 
-                self.natural_generator.generate(duration_seconds, sound_type="heartbeat", **kwargs),
-            "shushing": lambda duration_seconds, **kwargs: 
-                self.natural_generator.generate(duration_seconds, sound_type="shushing", **kwargs),
-            "fan": lambda duration_seconds, **kwargs: 
-                self.natural_generator.generate(duration_seconds, sound_type="fan", **kwargs),
-            "umbilical_swish": lambda duration_seconds, **kwargs: 
-                self.womb_generator.generate(duration_seconds, sound_type="umbilical_swish", **kwargs),
-        }
-
-        # Predefined baby problems and recommended profiles with enhanced scientific parameters
-        self._initialize_problem_profiles()
-
-    def _initialize_problem_profiles(self) -> None:
-        """Initialize problem profiles using dataclasses for better structure"""
-        from models.profiles import create_problem_profiles
-        try:
-            self.problem_profiles = create_problem_profiles()
-        except Exception as e:
-            logger.error(f"Error initializing problem profiles: {e}")
-            # Create empty profiles as fallback
-            self.problem_profiles = {}
-
+        self.crossfade_duration = crossfade_duration
+    
     def add_fade(
         self,
         audio: np.ndarray,
@@ -390,7 +237,7 @@ class BabySleepSoundGenerator:
             np.multiply(mixed, Constants.MAX_AUDIO_VALUE / max_val, out=mixed)
 
         return mixed
-
+        
     def find_best_loop_point(
         self, audio: np.ndarray, segment_duration: float = 60.0
     ) -> int:
@@ -519,11 +366,10 @@ class BabySleepSoundGenerator:
             crossfade_seconds = self.crossfade_duration
         
         try:    
-            if self.looping_method == LoopingMethod.CROSS_CORRELATION:
-                # Find the best place to create the loop
-                loop_point = self.find_best_loop_point(audio)
-                # Use this as the end of our looped segment
-                audio = audio[:loop_point]
+            # Find the best place to create the loop
+            loop_point = self.find_best_loop_point(audio)
+            # Use this as the end of our looped segment
+            audio = audio[:loop_point]
 
             crossfade_samples = int(crossfade_seconds * self.sample_rate)
 
@@ -570,7 +416,24 @@ class BabySleepSoundGenerator:
             # Return original audio if looping fails
             return audio
 
-    def _print_safety_information(self, volume: float) -> None:
+
+class OutputManager:
+    """
+    Manages output operations and safety information.
+    """
+    
+    def __init__(self, volume_to_db_spl: Dict[float, float], safe_duration_hours: Dict[float, float]):
+        """
+        Initialize the output manager.
+        
+        Args:
+            volume_to_db_spl: Dictionary mapping normalized volumes to dB SPL values
+            safe_duration_hours: Dictionary mapping dB SPL levels to safe listening hours
+        """
+        self.volume_to_db_spl = volume_to_db_spl
+        self.safe_duration_hours = safe_duration_hours
+    
+    def print_safety_information(self, volume: float) -> None:
         """Print safety information based on the volume level"""
         try:
             # Find the closest SPL value for the given volume
@@ -604,6 +467,227 @@ class BabySleepSoundGenerator:
             
         except Exception as e:
             logger.error(f"Error displaying safety information: {e}")
+
+
+class ProfileManager:
+    """
+    Manages problem profiles for different baby sleep issues.
+    """
+    
+    def __init__(self):
+        """Initialize the profile manager."""
+        self.problem_profiles = {}
+        self._initialize_problem_profiles()
+    
+    def _initialize_problem_profiles(self) -> None:
+        """Initialize problem profiles using dataclasses for better structure"""
+        from models.profiles import create_problem_profiles
+        try:
+            self.problem_profiles = create_problem_profiles()
+        except Exception as e:
+            logger.error(f"Error initializing problem profiles: {e}")
+            # Create empty profiles as fallback
+            self.problem_profiles = {}
+    
+    def get_profile(self, problem: str) -> Optional[ProblemProfile]:
+        """
+        Get a specific problem profile.
+        
+        Args:
+            problem: Name of the problem profile
+            
+        Returns:
+            Problem profile or None if not found
+        """
+        return self.problem_profiles.get(problem)
+    
+    def get_all_profile_names(self) -> List[str]:
+        """
+        Get all available profile names.
+        
+        Returns:
+            List of profile names
+        """
+        return list(self.problem_profiles.keys())
+    
+    def get_profile_descriptions(self) -> Dict[str, str]:
+        """
+        Get descriptions for all profiles.
+        
+        Returns:
+            Dictionary mapping profile names to descriptions
+        """
+        return {
+            problem: profile.description
+            for problem, profile in self.problem_profiles.items()
+        }
+
+
+class BabySleepSoundGenerator:
+    """Generate broadcast-quality sleep sounds for babies based on developmental needs"""
+
+    def __init__(
+        self,
+        sample_rate: int = Constants.DEFAULT_SAMPLE_RATE,
+        bit_depth: int = Constants.DEFAULT_BIT_DEPTH,
+        channels: int = Constants.DEFAULT_CHANNELS,
+        target_loudness: float = Constants.DEFAULT_TARGET_LOUDNESS,
+        use_hrtf: bool = True,
+        room_simulation: bool = True,
+        config_file: Optional[str] = None,
+        seed: Optional[int] = None,
+        use_equal_loudness: bool = True,
+        use_limiter: bool = True,
+        use_organic_drift: bool = True,
+        use_diffusion: bool = False,
+    ):
+        """Initialize the generator with professional audio quality settings"""
+        # Load configuration if provided
+        if config_file:
+            try:
+                self.config = ConfigManager.get_instance(config_file)
+                # Use values from config or fall back to defaults
+                sample_rate = self.config.get_int("DEFAULT", "sample_rate", sample_rate)
+                bit_depth = self.config.get_int("DEFAULT", "bit_depth", bit_depth)
+                channels = self.config.get_int("DEFAULT", "channels", channels)
+                target_loudness = self.config.get_float("DEFAULT", "target_loudness", target_loudness)
+                use_hrtf = self.config.get_bool("DEFAULT", "use_hrtf", use_hrtf)
+                room_simulation = self.config.get_bool("DEFAULT", "room_simulation", room_simulation)
+            except Exception as e:
+                logger.error(f"Error loading configuration: {e}")
+                logger.warning("Using default settings")
+                self.config = None
+        else:
+            self.config = None
+        
+        # Initialize random state manager with the seed
+        self.random_state = RandomStateManager.get_instance(seed)
+        self.seed = self.random_state.seed  # Store the actual seed used
+        
+        self.sample_rate = sample_rate
+        self.bit_depth = bit_depth  # 16, 24, or 32
+        self.channels = channels
+        self.target_loudness = target_loudness  # LUFS
+        self.use_hrtf = use_hrtf and HAS_LIBROSA
+        self.room_simulation = room_simulation and HAS_PYROOMACOUSTICS
+
+        # Store new noise enhancement parameters
+        self.use_equal_loudness = use_equal_loudness
+        self.use_limiter = use_limiter
+        self.use_organic_drift = use_organic_drift
+        self.use_diffusion = use_diffusion
+
+        # Set modulation parameters for natural variation
+        self.use_dynamic_modulation = True
+        self.modulation_depth = 0.08  # 8% variation
+        self.modulation_rate = 0.002  # Very slow modulation (cycles per second)
+        self.use_perlin = HAS_PERLIN  # Use Perlin noise if available
+
+        # Choose appropriate looping method
+        self.looping_method = LoopingMethod.CROSS_CORRELATION
+        self.crossfade_duration = Constants.DEFAULT_CROSSFADE_DURATION
+
+        # Reference volume calibration (mapping normalized values to dB SPL at 1m)
+        # Based on clinical standards for infant sound therapy
+        self.volume_to_db_spl = {
+            0.3: 55.0,  # 55 dB SPL at 1m
+            0.4: 58.0,  # 58 dB SPL at 1m
+            0.5: 62.0,  # 62 dB SPL at 1m
+            0.6: 66.0,  # 66 dB SPL at 1m (AAP max guideline)
+            0.7: 70.0,  # 70 dB SPL at 1m (exceeds AAP guidelines)
+            0.8: 75.0,  # 75 dB SPL at 1m (well above recommendations)
+            0.9: 80.0,  # 80 dB SPL at 1m (excessive)
+        }
+
+        # Safe listening duration at various levels (based on WHO guidelines)
+        self.safe_duration_hours = Constants.WHO_SAFE_HOURS
+
+        # Initialize component generators using the factory pattern
+        try:
+            self.noise_generator = SoundGeneratorFactory.create_generator(
+                "noise",
+                sample_rate,
+                self.use_perlin,
+                modulation_depth=self.modulation_depth,
+                seed=self.seed,
+                use_equal_loudness=self.use_equal_loudness,
+                use_limiter=self.use_limiter,
+                use_organic_drift=self.use_organic_drift,
+                use_diffusion=self.use_diffusion
+            )
+            
+            self.natural_generator = SoundGeneratorFactory.create_generator(
+                "natural",
+                sample_rate,
+                self.use_perlin,
+                seed=self.seed
+            )
+            
+            self.womb_generator = SoundGeneratorFactory.create_generator(
+                "womb",
+                sample_rate,
+                self.use_perlin,
+                seed=self.seed
+            )
+        except Exception as e:
+            logger.error(f"Error initializing sound generators: {e}")
+            raise
+
+        # Initialize component classes
+        try:
+            # Create audio processor
+            self.audio_processor = AudioProcessor(sample_rate, self.crossfade_duration)
+            
+            # Create output manager
+            self.output_manager = OutputManager(self.volume_to_db_spl, self.safe_duration_hours)
+            
+            # Create profile manager
+            self.profile_manager = ProfileManager()
+            
+            # Initialize processors
+            self.spatial_processor = SpatialProcessor(sample_rate, use_hrtf)
+            self.room_processor = RoomAcousticsProcessor(sample_rate, room_simulation)
+            self.frequency_processor = FrequencyProcessor(sample_rate)
+            self.modulation_processor = ModulationProcessor(
+                sample_rate, self.use_perlin, depth=self.modulation_depth, rate=self.modulation_rate
+            )
+            
+            # Initialize effect modules
+            self.breathing_modulator = BreathingModulator(sample_rate, self.use_perlin)
+            self.sleep_cycle_modulator = SleepCycleModulator(sample_rate, self.use_perlin)
+            self.dynamic_volume_processor = DynamicVolumeProcessor(sample_rate, self.volume_to_db_spl)
+            self.reflex_preventer = ReflexPreventer(sample_rate)
+            
+            # Initialize output modules
+            self.loudness_normalizer = LoudnessNormalizer(sample_rate, target_loudness)
+            self.audio_exporter = AudioExporter(sample_rate, bit_depth, channels)
+            self.spectrum_visualizer = SpectrumVisualizer(sample_rate)
+            
+            # Initialize parallel processor
+            self.parallel_processor = ParallelProcessor()
+        except Exception as e:
+            logger.error(f"Error initializing processors: {e}")
+            raise
+        
+        # Define available sound profiles with updated factory pattern
+        self.sound_profiles = {
+            "white": lambda duration_seconds, **kwargs: 
+                self.noise_generator.generate(duration_seconds, sound_type="white", **kwargs),
+            "pink": lambda duration_seconds, **kwargs: 
+                self.noise_generator.generate(duration_seconds, sound_type="pink", **kwargs),
+            "brown": lambda duration_seconds, **kwargs: 
+                self.noise_generator.generate(duration_seconds, sound_type="brown", **kwargs),
+            "womb": lambda duration_seconds, **kwargs: 
+                self.womb_generator.generate(duration_seconds, sound_type="womb", **kwargs),
+            "heartbeat": lambda duration_seconds, **kwargs: 
+                self.natural_generator.generate(duration_seconds, sound_type="heartbeat", **kwargs),
+            "shushing": lambda duration_seconds, **kwargs: 
+                self.natural_generator.generate(duration_seconds, sound_type="shushing", **kwargs),
+            "fan": lambda duration_seconds, **kwargs: 
+                self.natural_generator.generate(duration_seconds, sound_type="fan", **kwargs),
+            "umbilical_swish": lambda duration_seconds, **kwargs: 
+                self.womb_generator.generate(duration_seconds, sound_type="umbilical_swish", **kwargs),
+        }
 
     def generate_from_config(self, config: SoundConfiguration, progress_callback=None) -> Optional[str]:
         """
@@ -751,7 +835,7 @@ class BabySleepSoundGenerator:
                     if hasattr(config, "motion_smoothing") and config.motion_smoothing:
                         motion_smoothing = MotionSmoothing(**config.motion_smoothing)
                     
-                    shaped_noise = self.mix_sounds(
+                    shaped_noise = self.audio_processor.mix_sounds(
                         shaped_noise, overlay_sounds, mix_ratios, motion_smoothing
                     )
             
@@ -830,13 +914,13 @@ class BabySleepSoundGenerator:
             # 7. Create seamless loop
             logger.info("Creating seamless loop...")
             progress.update(0, status_info={"current_operation": "Creating seamless loop"})
-            looped = self.create_seamless_loop(processed_audio, self.crossfade_duration)
+            looped = self.audio_processor.create_seamless_loop(processed_audio, self.crossfade_duration)
             progress.update(1)
             
             # 8. Add fades
             logger.info("Adding fade in/out...")
             progress.update(0, status_info={"current_operation": "Adding fades"})
-            faded = self.add_fade(looped)
+            faded = self.audio_processor.add_fade(looped)
             progress.update(1)
             
             # 9. Apply loudness normalization
@@ -892,7 +976,7 @@ class BabySleepSoundGenerator:
                 )
             
             # Print safety information based on volume
-            self._print_safety_information(config.volume)
+            self.output_manager.print_safety_information(config.volume)
             
             # Mark as complete
             progress.complete(status_info={
@@ -952,13 +1036,13 @@ class BabySleepSoundGenerator:
         Returns:
             Path to the generated audio file or None if generation failed
         """
-        if problem not in self.problem_profiles:
-            error_msg = f"Unknown problem profile: {problem}. Available profiles: {list(self.problem_profiles.keys())}"
+        if problem not in self.profile_manager.problem_profiles:
+            error_msg = f"Unknown problem profile: {problem}. Available profiles: {list(self.profile_manager.problem_profiles.keys())}"
             logger.error(error_msg)
             raise ValueError(error_msg)
 
         try:
-            profile = self.problem_profiles[problem]
+            profile = self.profile_manager.problem_profiles[problem]
 
             # Use provided volume or default from profile
             if volume is None:
@@ -1062,7 +1146,7 @@ class BabySleepSoundGenerator:
                     logger.info("Mixing sounds...")
                     progress.update(0, status_info={"current_operation": "Mixing sounds"})
                     
-                    mixed = self.mix_sounds(
+                    mixed = self.audio_processor.mix_sounds(
                         shaped_noise, overlay_sounds, mix_ratios, profile.motion_smoothing
                     )
                 else:
@@ -1159,13 +1243,13 @@ class BabySleepSoundGenerator:
             # Create seamless looping
             logger.info("Creating seamless loop...")
             progress.update(0, status_info={"current_operation": "Creating seamless loop"})
-            looped = self.create_seamless_loop(processed_audio, self.crossfade_duration)
+            looped = self.audio_processor.create_seamless_loop(processed_audio, self.crossfade_duration)
             progress.update(1)
 
             # Add fade in/out
             logger.info("Adding fade in/out...")
             progress.update(0, status_info={"current_operation": "Adding fades"})
-            faded = self.add_fade(looped)
+            faded = self.audio_processor.add_fade(looped)
             progress.update(1)
 
             # Generate output filename if not provided
@@ -1210,7 +1294,7 @@ class BabySleepSoundGenerator:
             logger.info(f"Generated {format.upper()} file: {output_path}")
 
             # Print safety information based on volume
-            self._print_safety_information(volume)
+            self.output_manager.print_safety_information(volume)
 
             # Mark as complete
             progress.complete(status_info={
@@ -1415,7 +1499,7 @@ class BabySleepSoundGenerator:
             if overlay_arrays:
                 logger.info("Mixing sounds...")
                 progress.update(0, status_info={"current_operation": "Mixing sounds"})
-                mixed = self.mix_sounds(shaped, overlay_arrays, mix_ratios, motion_params)
+                mixed = self.audio_processor.mix_sounds(shaped, overlay_arrays, mix_ratios, motion_params)
             else:
                 mixed = shaped
             progress.update(1)
@@ -1466,13 +1550,13 @@ class BabySleepSoundGenerator:
             # Create seamless loop
             logger.info("Creating seamless loop...")
             progress.update(0, status_info={"current_operation": "Creating seamless loop"})
-            looped = self.create_seamless_loop(processed_audio)
+            looped = self.audio_processor.create_seamless_loop(processed_audio)
             progress.update(1)
 
             # Add fades
             logger.info("Adding fade in/out...")
             progress.update(0, status_info={"current_operation": "Adding fades"})
-            faded = self.add_fade(looped)
+            faded = self.audio_processor.add_fade(looped)
             progress.update(1)
 
             # Generate output filename if not provided
@@ -1515,7 +1599,7 @@ class BabySleepSoundGenerator:
                 self.spectrum_visualizer.visualize_spectrum(normalized, f"Custom {primary_noise} Noise Profile", viz_path)
 
             # Print safety information
-            self._print_safety_information(volume)
+            self.output_manager.print_safety_information(volume)
 
             logger.info(f"Done! Generated {format.upper()} file: {output_path}")
             
@@ -1546,10 +1630,7 @@ class BabySleepSoundGenerator:
         """Return descriptions of all predefined problem profiles"""
         try:
             generator = cls()
-            return {
-                problem: profile.description
-                for problem, profile in generator.problem_profiles.items()
-            }
+            return generator.profile_manager.get_profile_descriptions()
         except Exception as e:
             logger.error(f"Error getting problem descriptions: {e}")
             return {}
