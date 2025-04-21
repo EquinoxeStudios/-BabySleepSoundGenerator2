@@ -5,7 +5,7 @@ Natural sound generators like heartbeat, shushing, and fan sounds.
 import numpy as np
 from scipy import signal
 import logging
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, Callable, Tuple
 
 from sound_profiles.base import SoundProfileGenerator
 from models.parameters import HeartbeatParameters, DynamicShushing, ParentalVoice
@@ -48,19 +48,27 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         Returns:
             Sound profile as numpy array
         """
-        # Get sound type with default to "heartbeat"
+        # Validate input parameters
+        if duration_seconds <= 0:
+            logger.error("Duration must be positive")
+            raise ValueError("Duration must be positive")
+        
+        # Extract and validate sound type
         sound_type = kwargs.get('sound_type', 'heartbeat')
+        if sound_type not in ['heartbeat', 'shushing', 'fan']:
+            logger.error(f"Unknown natural sound type: {sound_type}")
+            raise ValueError(f"Unknown natural sound type: {sound_type}")
+        
+        # Generator function mapping
+        generators = {
+            'heartbeat': self._generate_heartbeat,
+            'shushing': self._generate_shushing_sound,
+            'fan': self._generate_fan_sound
+        }
         
         try:
-            if sound_type == 'heartbeat':
-                heartbeat_params = kwargs.get('heartbeat_params', None)
-                return self.generate_heartbeat(duration_seconds, heartbeat_params)
-            elif sound_type == 'shushing':
-                return self.generate_shushing_sound(duration_seconds)
-            elif sound_type == 'fan':
-                return self.generate_fan_sound(duration_seconds)
-            else:
-                raise ValueError(f"Unknown natural sound type: {sound_type}")
+            # Call the appropriate generator with error handling
+            return generators[sound_type](duration_seconds, **kwargs)
         except Exception as e:
             logger.error(f"Error generating {sound_type} sound: {e}")
             # Generate a simple fallback sound
@@ -88,222 +96,289 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             # Last resort: return simple noise
             return np.random.normal(0, 0.3, int(duration_seconds * self.sample_rate))
     
-    def generate_heartbeat(
-        self,
-        duration_seconds: int,
-        heartbeat_params: Optional[HeartbeatParameters] = None,
-    ) -> np.ndarray:
+    def _generate_heartbeat(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate a maternal heartbeat sound with natural variations.
-
+        
         Args:
             duration_seconds: Duration in seconds
-            heartbeat_params: Parameters for heartbeat generation
-
+            **kwargs: Additional parameters including heartbeat_params
+            
         Returns:
             Heartbeat audio array
         """
-        # Use default parameters if none provided
+        # Extract and validate heartbeat parameters
+        heartbeat_params = kwargs.get('heartbeat_params', None)
         if heartbeat_params is None:
             heartbeat_params = HeartbeatParameters()
-            
+        elif not isinstance(heartbeat_params, HeartbeatParameters):
+            logger.warning("Invalid heartbeat parameters, using defaults")
+            heartbeat_params = HeartbeatParameters()
+        
+        # Validate BPM range
+        if heartbeat_params.variable_rate:
+            min_bpm, max_bpm = heartbeat_params.bpm_range
+            if min_bpm <= 0 or max_bpm <= 0 or min_bpm >= max_bpm:
+                logger.warning("Invalid BPM range, using defaults")
+                heartbeat_params.bpm_range = (60.0, 80.0)
+        
         try:
-            # Extract parameters
-            variable_rate = heartbeat_params.variable_rate
-            bpm = heartbeat_params.base_bpm
-            bpm_range = heartbeat_params.bpm_range
-            variation_period_minutes = heartbeat_params.variation_period_minutes
-            
+            # Memory-efficient array allocation
             samples = int(duration_seconds * self.sample_rate)
+            heartbeat = np.zeros(samples, dtype=np.float32)  # Use float32 to reduce memory usage
 
-            # Time points
-            t = np.linspace(0, duration_seconds, samples, endpoint=False)
+            # Generate beat times based on variable or fixed rate
+            beat_samples = self._generate_beat_samples(
+                duration_seconds, 
+                heartbeat_params.variable_rate,
+                heartbeat_params.base_bpm,
+                heartbeat_params.bpm_range,
+                heartbeat_params.variation_period_minutes
+            )
+            
+            # Generate amplitude variations
+            amp_variations = self._generate_amplitude_variations(
+                len(beat_samples), 
+                HeartbeatConstants.AMPLITUDE_VARIATION_PCT
+            )
 
-            # Create the base heartbeat using a combination of sine waves
-            heartbeat = np.zeros(samples)
-
-            # For variable rate, we'll use either perlin noise or sine modulation
-            if variable_rate:
-                # Calculate how many variation cycles there will be
-                cycles = duration_seconds / (variation_period_minutes * 60)
-
-                if HAS_PERLIN and self.use_perlin:
-                    # Generate smooth perlin noise for natural BPM variations
-                    bpm_noise = generate_perlin_noise(
-                        self.sample_rate, 
-                        duration_seconds / 10, 
-                        octaves=1, 
-                        persistence=0.5,
-                        seed=self.random_state.seed
-                    )
-                    
-                    # Stretch the noise to match desired cycle period
-                    indices = np.linspace(0, len(bpm_noise) - 1, int(cycles * 100) + 1)
-                    indices = np.clip(indices.astype(int), 0, len(bpm_noise) - 1)
-                    bpm_variations = bpm_noise[indices]
-                    
-                    # Interpolate to full length - FIXED: Use arrays of same length
-                    full_indices = np.linspace(0, len(bpm_variations) - 1, int(duration_seconds) + 1)
-                    index_array = np.arange(len(bpm_variations))
-                    if len(index_array) > 0:
-                        bpm_variations = np.interp(full_indices, index_array, bpm_variations)
-                    
-                    # Scale to desired BPM range
-                    min_bpm, max_bpm = bpm_range
-                    bpm_range_halfwidth = (max_bpm - min_bpm) / 2
-                    center_bpm = min_bpm + bpm_range_halfwidth
-                    
-                    # Map from [-0.5, 0.5] to [min_bpm, max_bpm]
-                    bpm_variations = center_bpm + bpm_range_halfwidth * bpm_variations
-                else:
-                    # Use sinusoidal variation as fallback
-                    variation_freq = 1 / (variation_period_minutes * 60)  # Hz
-                    min_bpm, max_bpm = bpm_range
-                    center_bpm = (min_bpm + max_bpm) / 2
-                    bpm_range_halfwidth = (max_bpm - min_bpm) / 2
-                    bpm_variations = center_bpm + bpm_range_halfwidth * np.sin(2 * np.pi * variation_freq * t)
-
-                # Now we have a time-varying BPM function
-                # We'll integrate it to get the total beats over time
-                # This gives us the phase of the heartbeat at each point in time
-                
-                # Start with constant period for the first beat
-                instantaneous_period = 60 / bpm_variations[0]  # seconds per beat
-                beat_times = [0]  # Start time of each beat
-
-                # Calculate when each beat should occur based on variable BPM
-                current_time = 0
-                beat_index = 0
-
-                while current_time < duration_seconds:
-                    # Get BPM at this time point - FIXED: Make sure arrays used in np.interp have the same length
-                    # Create t_values appropriate for the length of bpm_variations
-                    t_values = np.linspace(0, duration_seconds, len(bpm_variations))
-                    current_bpm = np.interp(current_time, t_values, bpm_variations)
-                    
-                    # Convert to period (seconds per beat)
-                    instantaneous_period = 60 / current_bpm
-                    # Next beat time
-                    current_time += instantaneous_period
-                    if current_time < duration_seconds:
-                        beat_times.append(current_time)
-                        beat_index += 1
-
-                # Convert beat times to sample indices
-                beat_samples = (np.array(beat_times) * self.sample_rate).astype(int)
-            else:
-                # Fixed BPM, simple calculation
-                # Convert bpm to frequency in Hz
-                frequency = bpm / 60.0
-                beat_period = 1.0 / frequency
-                beat_samples = (np.arange(0, duration_seconds, beat_period) * self.sample_rate).astype(int)
-
-            # Each beat consists of a "lub" and a "dub"
-            lub_duration = HeartbeatConstants.LUB_DURATION_SECONDS
-            dub_duration = HeartbeatConstants.DUB_DURATION_SECONDS
-            dub_delay = HeartbeatConstants.DUB_DELAY_SECONDS
-
-            # Add slight natural variation to heartbeat amplitude
-            if HAS_PERLIN and self.use_perlin:
-                # Generate very slow perlin noise for natural amplitude variations
-                amp_variation = generate_perlin_noise(
-                    self.sample_rate, 
-                    duration_seconds / 5, 
-                    octaves=1, 
-                    persistence=0.5,
-                    seed=self.random_state.seed
-                )
-                
-                # Stretch to get only a few variations over the whole duration
-                indices = np.linspace(0, len(amp_variation) - 1, len(beat_samples))
-                indices = np.clip(indices.astype(int), 0, len(amp_variation) - 1)
-                amp_variations = 0.85 + HeartbeatConstants.AMPLITUDE_VARIATION_PCT * amp_variation[indices]
-            else:
-                # Fallback to random variations
-                amp_variations = 0.85 + HeartbeatConstants.AMPLITUDE_VARIATION_PCT * self.random_state.normal(0, 0.3, len(beat_samples))
-                
-                # Smooth the variations
-                amp_variations = np.convolve(amp_variations, np.ones(5) / 5, mode="same")
-
-            # Create envelopes for lub and dub with slight variations
-            for i, beat_start_sample in enumerate(beat_samples):
-                if beat_start_sample >= samples:
-                    continue
-
-                # Convert to time for easier calculation
-                beat_start = beat_start_sample / self.sample_rate
-
-                # Amplitude variation for this beat
-                amp_factor = amp_variations[min(i, len(amp_variations) - 1)]
-
-                # "Lub" part
-                lub_env_width = lub_duration / 5
-                lub_samples = int(lub_duration * self.sample_rate)
-                lub_end = min(beat_start_sample + lub_samples, samples)
-
-                # Create time vector for this segment
-                t_lub = (np.linspace(0, lub_end - beat_start_sample, lub_end - beat_start_sample) / 
-                        self.sample_rate)
-
-                # Create envelope and waveform
-                lub_envelope = np.exp(-(t_lub**2) / (2 * lub_env_width**2))
-                lub = lub_envelope * np.sin(2 * np.pi * HeartbeatConstants.LUB_FREQUENCY_HZ * t_lub) * amp_factor
-
-                # Add to heartbeat sound
-                heartbeat[beat_start_sample:lub_end] += lub
-
-                # "Dub" part (softer and follows the lub)
-                dub_start_sample = min(beat_start_sample + int(dub_delay * self.sample_rate), samples - 1)
-                dub_env_width = dub_duration / 5
-                dub_samples = int(dub_duration * self.sample_rate)
-                dub_end = min(dub_start_sample + dub_samples, samples)
-
-                # Check if there's room for the dub sound
-                if dub_end > dub_start_sample:
-                    # Create time vector for dub segment
-                    t_dub = (np.linspace(0, dub_end - dub_start_sample, dub_end - dub_start_sample) / 
-                            self.sample_rate)
-
-                    # Create envelope and waveform (softer than lub)
-                    dub_envelope = np.exp(-(t_dub**2) / (2 * dub_env_width**2))
-                    dub = 0.7 * dub_envelope * np.sin(2 * np.pi * HeartbeatConstants.DUB_FREQUENCY_HZ * t_dub) * amp_factor
-
-                    # Add to heartbeat sound
-                    heartbeat[dub_start_sample:dub_end] += dub
+            # Create the heartbeat waveform
+            self._create_heartbeat_waveform(
+                heartbeat, 
+                beat_samples,
+                amp_variations,
+                HeartbeatConstants.LUB_DURATION_SECONDS,
+                HeartbeatConstants.DUB_DURATION_SECONDS,
+                HeartbeatConstants.DUB_DELAY_SECONDS,
+                HeartbeatConstants.LUB_FREQUENCY_HZ,
+                HeartbeatConstants.DUB_FREQUENCY_HZ
+            )
 
             # Apply a subtle low-pass filter for more natural sound
             b, a = signal.butter(4, 200 / (self.sample_rate / 2), "low")
             heartbeat = signal.lfilter(b, a, heartbeat)
 
-            # Normalize
+            # Normalize and sanitize
             max_val = np.max(np.abs(heartbeat))
             if max_val > 0:
                 heartbeat = heartbeat / max_val * HeartbeatConstants.DEFAULT_AMPLITUDE
 
-            # Sanitize to ensure valid audio
             return self.sanitize_audio(heartbeat, max_amplitude=HeartbeatConstants.DEFAULT_AMPLITUDE)
             
         except Exception as e:
             logger.error(f"Error generating heartbeat: {e}")
             # Generate a simple fallback heartbeat in case of error
             return self._generate_simple_fallback_heartbeat(duration_seconds)
+    
+    def _generate_beat_samples(
+        self, duration_seconds: int, variable_rate: bool, 
+        base_bpm: float, bpm_range: Tuple[float, float], 
+        variation_period_minutes: float
+    ) -> np.ndarray:
+        """
+        Generate sample indices for heartbeat timings.
+        
+        Args:
+            duration_seconds: Duration in seconds
+            variable_rate: Whether to use variable heart rate
+            base_bpm: Base BPM value
+            bpm_range: Range of BPM variation (min, max)
+            variation_period_minutes: Period of variation in minutes
             
+        Returns:
+            Array of sample indices for heartbeats
+        """
+        samples = int(duration_seconds * self.sample_rate)
+        
+        if not variable_rate:
+            # Fixed BPM, simple calculation
+            frequency = base_bpm / 60.0
+            beat_period = 1.0 / frequency
+            return (np.arange(0, duration_seconds, beat_period) * self.sample_rate).astype(int)
+        
+        # For variable rate, we need to compute instantaneous BPM at each time point
+        if HAS_PERLIN and self.use_perlin:
+            # Generate smooth perlin noise for natural BPM variations
+            perlin_duration = duration_seconds / 10  # Generate shorter noise and stretch
+            bpm_noise = generate_perlin_noise(
+                self.sample_rate, 
+                perlin_duration, 
+                octaves=1, 
+                persistence=0.5,
+                seed=self.random_state.seed
+            )
+            
+            # Stretch the noise to match desired variation period
+            cycles = duration_seconds / (variation_period_minutes * 60)
+            indices = np.linspace(0, len(bpm_noise) - 1, int(cycles * 100) + 1)
+            indices = np.clip(indices.astype(int), 0, len(bpm_noise) - 1)
+            
+            # Scale to desired BPM range
+            min_bpm, max_bpm = bpm_range
+            bpm_range_halfwidth = (max_bpm - min_bpm) / 2
+            center_bpm = min_bpm + bpm_range_halfwidth
+            bpm_variations = center_bpm + bpm_range_halfwidth * np.clip(bpm_noise[indices], -1, 1)
+            
+            # Interpolate to full duration
+            t_values = np.linspace(0, cycles, len(bpm_variations))
+            t_points = np.linspace(0, cycles, int(duration_seconds) + 1)
+            bpm_curve = np.interp(t_points, t_values, bpm_variations)
+        else:
+            # Use sinusoidal variation as fallback
+            variation_freq = 1 / (variation_period_minutes * 60)  # Hz
+            t = np.linspace(0, duration_seconds, int(duration_seconds) + 1)
+            min_bpm, max_bpm = bpm_range
+            center_bpm = (min_bpm + max_bpm) / 2
+            bpm_range_halfwidth = (max_bpm - min_bpm) / 2
+            bpm_curve = center_bpm + bpm_range_halfwidth * np.sin(2 * np.pi * variation_freq * t)
+        
+        # Integrate the instantaneous frequency to get beat times
+        beat_times = [0]  # Start with first beat at t=0
+        current_time = 0
+        
+        while current_time < duration_seconds:
+            # Get BPM at current time and convert to period
+            current_bpm = np.interp(current_time, np.arange(len(bpm_curve)), bpm_curve)
+            period = 60 / current_bpm  # seconds per beat
+            
+            # Next beat time
+            current_time += period
+            if current_time < duration_seconds:
+                beat_times.append(current_time)
+        
+        # Convert to sample indices
+        return (np.array(beat_times) * self.sample_rate).astype(int)
+    
+    def _generate_amplitude_variations(self, num_beats: int, variation_pct: float) -> np.ndarray:
+        """
+        Generate natural amplitude variations for heartbeats.
+        
+        Args:
+            num_beats: Number of beats to generate variations for
+            variation_pct: Percentage of amplitude variation
+            
+        Returns:
+            Array of amplitude variation factors
+        """
+        if HAS_PERLIN and self.use_perlin:
+            # Generate very slow perlin noise for natural amplitude variations
+            amp_variation = generate_perlin_noise(
+                self.sample_rate, 
+                num_beats / 10,  # Short duration, will be stretched 
+                octaves=1, 
+                persistence=0.5,
+                seed=self.random_state.seed
+            )
+            
+            # Stretch to get only a few variations over all beats
+            indices = np.linspace(0, len(amp_variation) - 1, num_beats)
+            indices = np.clip(indices.astype(int), 0, len(amp_variation) - 1)
+            amp_variations = 0.85 + variation_pct * np.clip(amp_variation[indices], -1, 1)
+        else:
+            # Fallback to random variations with smoothing
+            amp_variations = 0.85 + variation_pct * self.random_state.normal(0, 0.3, num_beats)
+            
+            # Smooth the variations with a moving average
+            kernel_size = min(5, num_beats)
+            if kernel_size > 0:
+                kernel = np.ones(kernel_size) / kernel_size
+                amp_variations = np.convolve(amp_variations, kernel, mode="same")
+        
+        return amp_variations
+    
+    def _create_heartbeat_waveform(
+        self, 
+        heartbeat: np.ndarray, 
+        beat_samples: np.ndarray,
+        amp_variations: np.ndarray,
+        lub_duration: float,
+        dub_duration: float,
+        dub_delay: float,
+        lub_frequency: float,
+        dub_frequency: float
+    ) -> None:
+        """
+        Create the actual heartbeat waveform with lub and dub sounds.
+        
+        Args:
+            heartbeat: Output array to fill with heartbeat
+            beat_samples: Array of beat start sample indices
+            amp_variations: Array of amplitude variation factors
+            lub_duration: Duration of the 'lub' sound in seconds
+            dub_duration: Duration of the 'dub' sound in seconds
+            dub_delay: Delay after 'lub' before 'dub' starts, in seconds
+            lub_frequency: Frequency of the 'lub' sound in Hz
+            dub_frequency: Frequency of the 'dub' sound in Hz
+        """
+        samples = len(heartbeat)
+        lub_samples = int(lub_duration * self.sample_rate)
+        dub_samples = int(dub_duration * self.sample_rate)
+        dub_delay_samples = int(dub_delay * self.sample_rate)
+        
+        # Pre-compute common envelopes and waveforms to reduce redundant calculations
+        lub_env_width = lub_duration / 5
+        dub_env_width = dub_duration / 5
+        
+        # Create time vectors for lub and dub waveforms
+        t_lub = np.linspace(0, lub_duration, lub_samples, endpoint=False)
+        t_dub = np.linspace(0, dub_duration, dub_samples, endpoint=False)
+        
+        # Create envelopes
+        lub_envelope = np.exp(-(t_lub**2) / (2 * lub_env_width**2))
+        dub_envelope = np.exp(-(t_dub**2) / (2 * dub_env_width**2))
+        
+        # Create base waveforms
+        lub_wave = np.sin(2 * np.pi * lub_frequency * t_lub)
+        dub_wave = np.sin(2 * np.pi * dub_frequency * t_dub)
+        
+        # Modulate with envelopes
+        lub_template = lub_envelope * lub_wave
+        dub_template = 0.7 * dub_envelope * dub_wave  # Dub is softer
+        
+        # Apply to each beat with careful bounds checking
+        for i, beat_start_sample in enumerate(beat_samples):
+            if beat_start_sample >= samples:
+                continue
+                
+            # Apply amplitude variation for this beat
+            amp_factor = amp_variations[min(i, len(amp_variations) - 1)]
+            
+            # "Lub" part
+            lub_end = min(beat_start_sample + lub_samples, samples)
+            lub_len = lub_end - beat_start_sample
+            if lub_len > 0:
+                heartbeat[beat_start_sample:lub_end] += lub_template[:lub_len] * amp_factor
+            
+            # "Dub" part (follows the lub)
+            dub_start_sample = min(beat_start_sample + dub_delay_samples, samples - 1)
+            dub_end = min(dub_start_sample + dub_samples, samples)
+            dub_len = dub_end - dub_start_sample
+            
+            if dub_len > 0 and dub_start_sample < samples:
+                heartbeat[dub_start_sample:dub_end] += dub_template[:dub_len] * amp_factor
+    
     def _generate_simple_fallback_heartbeat(self, duration_seconds: int) -> np.ndarray:
         """Generate simple heartbeat as fallback in case of error."""
         try:
             samples = int(duration_seconds * self.sample_rate)
-            heartbeat = np.zeros(samples)
+            heartbeat = np.zeros(samples, dtype=np.float32)
             
             # Simple constant rate heartbeat at 70 BPM
             bpm = 70
             period = 60 / bpm  # seconds per beat
             beat_interval_samples = int(period * self.sample_rate)
             
-            for i in range(0, samples, beat_interval_samples):
-                if i + 200 < samples:  # 200 samples for lub
-                    heartbeat[i:i+200] = 0.7 * np.sin(2 * np.pi * 60 * np.linspace(0, 0.1, 200))
-                if i + 500 < samples and i + 700 < samples:  # dub after 0.25s
-                    heartbeat[i+500:i+700] = 0.4 * np.sin(2 * np.pi * 45 * np.linspace(0, 0.1, 200))
+            # Vectorized approach for efficiency
+            beat_positions = np.arange(0, samples, beat_interval_samples)
+            
+            for pos in beat_positions:
+                if pos + 200 < samples:  # 200 samples for lub
+                    t = np.linspace(0, 0.1, 200)
+                    heartbeat[pos:pos+200] = 0.7 * np.sin(2 * np.pi * 60 * t) * np.sin(np.linspace(0, np.pi, 200))**2
+                
+                if pos + 500 < samples and pos + 700 < samples:  # dub after 0.25s
+                    t = np.linspace(0, 0.1, 200)
+                    heartbeat[pos+500:pos+700] = 0.4 * np.sin(2 * np.pi * 45 * t) * np.sin(np.linspace(0, np.pi, 200))**2
             
             return self.sanitize_audio(heartbeat, max_amplitude=0.7)
                 
@@ -314,12 +389,13 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             pulse_rate = 1.2  # beats per second
             return 0.5 * np.sin(2 * np.pi * pulse_rate * np.linspace(0, duration_seconds, samples))
 
-    def generate_shushing_sound(self, duration_seconds: int) -> np.ndarray:
+    def _generate_shushing_sound(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate a more natural shushing sound similar to what parents do to calm babies
         
         Args:
             duration_seconds: Length of the sound in seconds
+            **kwargs: Additional parameters
             
         Returns:
             Shushing sound array
@@ -339,57 +415,19 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             )
             shushing = signal.lfilter(b, a, white_noise)
 
-            # Create a more natural, human-like rhythm
-            t = np.linspace(0, duration_seconds, samples, endpoint=False)
-
-            if HAS_PERLIN and self.use_perlin:
-                # Use perlin noise for organic, human-like variations
-                shush_rhythm = generate_perlin_noise(
-                    self.sample_rate,
-                    duration_seconds, 
-                    octaves=2, 
-                    persistence=0.6,
-                    seed=self.random_state.seed
-                )
-
-                # Scale the noise to the appropriate rhythm rate
-                rhythm_scale = ShushingConstants.SHUSH_RATE_PER_SECOND
-                indices = np.linspace(0, len(shush_rhythm) // 20, samples)
-                indices = np.clip(indices.astype(int), 0, len(shush_rhythm) - 1)
-
-                # Transform to min-max range for a more natural shushing pattern
-                shush_modulation = (
-                    ShushingConstants.MODULATION_MIN + 
-                    (ShushingConstants.MODULATION_MAX - ShushingConstants.MODULATION_MIN) * 
-                    (0.5 + 0.5 * shush_rhythm[indices])
-                )
-            else:
-                # Fallback to sine-based rhythm with some randomness
-                shush_rate = ShushingConstants.SHUSH_RATE_PER_SECOND
-                phase_variation = 0.2 * self.random_state.normal(0, 1, int(duration_seconds * shush_rate) + 1)
-
-                # Create a modified sine wave with phase variations
-                shush_modulation = np.zeros(samples)
-                for i in range(int(duration_seconds * shush_rate)):
-                    start_idx = int(i * self.sample_rate / shush_rate)
-                    end_idx = int((i + 1) * self.sample_rate / shush_rate)
-                    end_idx = min(end_idx, samples)
-
-                    # Create a single shush cycle with natural attack and decay
-                    cycle_len = end_idx - start_idx
-                    if cycle_len > 0:
-                        cycle = (
-                            ShushingConstants.MODULATION_MIN + 
-                            (ShushingConstants.MODULATION_MAX - ShushingConstants.MODULATION_MIN) * 
-                            np.sin(np.linspace(0 + phase_variation[i], np.pi + phase_variation[i], cycle_len)) ** 2
-                        )
-                        shush_modulation[start_idx:end_idx] = cycle
+            # Generate modulation curve for natural rhythm
+            shush_modulation = self._generate_shushing_modulation(
+                samples,
+                duration_seconds,
+                ShushingConstants.SHUSH_RATE_PER_SECOND,
+                ShushingConstants.MODULATION_MIN,
+                ShushingConstants.MODULATION_MAX
+            )
 
             # Apply the modulation
             shushing = shushing * shush_modulation
 
             # Apply subtle formant filtering to make it sound more like human shushing
-            # FIXED: Removed the fs parameter which was causing the error
             formant_filter = signal.firwin2(
                 101,
                 [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
@@ -412,13 +450,82 @@ class NaturalSoundGenerator(SoundProfileGenerator):
                 return self.sanitize_audio(filtered, max_amplitude=0.7)
             except:
                 return noise * 0.7
+    
+    def _generate_shushing_modulation(
+        self, samples: int, duration_seconds: float, 
+        shush_rate: float, min_level: float, max_level: float
+    ) -> np.ndarray:
+        """
+        Generate a natural shushing modulation pattern.
+        
+        Args:
+            samples: Number of samples to generate
+            duration_seconds: Duration in seconds
+            shush_rate: Shushing cycles per second
+            min_level: Minimum modulation level
+            max_level: Maximum modulation level
+            
+        Returns:
+            Modulation curve array
+        """
+        t = np.linspace(0, duration_seconds, samples, endpoint=False)
+        
+        if HAS_PERLIN and self.use_perlin:
+            try:
+                # Generate slow perlin noise for organic variations
+                perlin_duration = duration_seconds / 5  # Short duration, will be stretched
+                shush_rhythm = generate_perlin_noise(
+                    self.sample_rate,
+                    perlin_duration, 
+                    octaves=2, 
+                    persistence=0.6,
+                    seed=self.random_state.seed
+                )
+                
+                # Scale to appropriate rhythm rate
+                indices = np.linspace(0, len(shush_rhythm) - 1, samples)
+                indices = np.clip(indices.astype(int), 0, len(shush_rhythm) - 1)
+                
+                # Transform to min-max range
+                level_range = max_level - min_level
+                shush_modulation = min_level + level_range * (0.5 + 0.5 * np.clip(shush_rhythm[indices], -1, 1))
+                
+                return shush_modulation
+            except Exception as e:
+                logger.warning(f"Error creating perlin modulation for shushing: {e}")
+                # Fall through to sine-based fallback
+        
+        # Fallback to sine-based rhythm with some randomness
+        phase_variation = 0.2 * self.random_state.normal(0, 1, int(duration_seconds * shush_rate) + 1)
+        
+        # Initialize modulation array
+        shush_modulation = np.zeros(samples, dtype=np.float32)
+        
+        # Create a modified sine wave with phase variations
+        for i in range(int(duration_seconds * shush_rate)):
+            start_idx = int(i * self.sample_rate / shush_rate)
+            end_idx = int((i + 1) * self.sample_rate / shush_rate)
+            end_idx = min(end_idx, samples)
+            
+            # Create a single shush cycle with natural attack and decay
+            cycle_len = end_idx - start_idx
+            if cycle_len > 0:
+                cycle = (
+                    min_level + 
+                    (max_level - min_level) * 
+                    np.sin(np.linspace(0 + phase_variation[i], np.pi + phase_variation[i], cycle_len)) ** 2
+                )
+                shush_modulation[start_idx:end_idx] = cycle
+        
+        return shush_modulation
 
-    def generate_fan_sound(self, duration_seconds: int) -> np.ndarray:
+    def _generate_fan_sound(self, duration_seconds: int, **kwargs) -> np.ndarray:
         """
         Generate a more realistic fan or air conditioner type sound
         
         Args:
             duration_seconds: Length of the sound in seconds
+            **kwargs: Additional parameters
             
         Returns:
             Fan sound array
@@ -426,66 +533,26 @@ class NaturalSoundGenerator(SoundProfileGenerator):
         try:
             samples = int(duration_seconds * self.sample_rate)
 
-            # Base noise is a mix of pink and white
-            # Start with white noise
-            white = self.random_state.normal(0, 0.5, samples)
+            # Generate the base noise (mix of pink and white)
+            base_noise = self._generate_fan_base_noise(samples)
             
-            # Create pink noise using simple filtering
-            pink_filter = signal.firwin(1001, 1000 / (self.sample_rate / 2), window='hann')
-            pink = signal.lfilter(pink_filter, 1, white)
-            pink = pink / np.max(np.abs(pink)) * 0.5  # Normalize
+            # Generate the fan rotation modulation
+            rotation_mod = self._generate_fan_rotation_modulation(
+                samples, 
+                duration_seconds,
+                FanConstants.BASE_ROTATION_HZ,
+                FanConstants.SPEED_VARIATION_PCT
+            )
             
-            # Mix white and pink noise
-            mixed = white * 0.7 + pink * 0.3
-
-            # Add a more natural, slightly irregular fan blade rotation
-            t = np.linspace(0, duration_seconds, samples, endpoint=False)
-
-            if HAS_PERLIN and self.use_perlin:
-                # Use perlin noise for natural speed variations
-                speed_variation = generate_perlin_noise(
-                    self.sample_rate,
-                    duration_seconds, 
-                    octaves=1, 
-                    persistence=0.5,
-                    seed=self.random_state.seed
-                )
-                
-                # Stretch to get only a few variations over the duration
-                indices = np.linspace(0, len(speed_variation) // 100, samples)
-                indices = np.clip(indices.astype(int), 0, len(speed_variation) - 1)
-                
-                # Average rotation speed with variations
-                base_rotation = FanConstants.BASE_ROTATION_HZ
-                rotation_speed = base_rotation * (1 + FanConstants.SPEED_VARIATION_PCT * speed_variation[indices])
-
-                # Integrate speed to get phase
-                phase = np.cumsum(rotation_speed) / self.sample_rate * 2 * np.pi
-
-                # Calculate modulation with harmonic overtones (real fans have multiple harmonics)
-                rotation_modulation = (0.08 * np.sin(phase) + 
-                                      0.04 * np.sin(2 * phase) + 
-                                      0.02 * np.sin(3 * phase))
-            else:
-                # Fallback to simpler fan simulation
-                rotation_rate = FanConstants.BASE_ROTATION_HZ
-                
-                # Add a slight drift to the rotation speed
-                drift = FanConstants.SPEED_VARIATION_PCT * np.sin(2 * np.pi * 0.05 * t)
-                rotation_modulation = 0.1 * np.sin(2 * np.pi * rotation_rate * (1 + drift) * t)
-                
-                # Add some harmonics
-                rotation_modulation += 0.05 * np.sin(2 * 2 * np.pi * rotation_rate * (1 + drift) * t)
-
             # Apply fan modulation
-            fan_sound = mixed * (1 + rotation_modulation)
+            fan_sound = base_noise * (1 + rotation_mod)
 
             # Apply resonance filtering to simulate fan housing
-            # Fans often have specific resonant frequencies
-            for freq in FanConstants.RESONANCE_FREQUENCIES_HZ:
-                q_factor = FanConstants.RESONANCE_Q_FACTOR
-                b, a = signal.iirpeak(freq, q_factor, self.sample_rate)
-                fan_sound = signal.lfilter(b, a, fan_sound)
+            fan_sound = self._apply_fan_resonance(
+                fan_sound, 
+                FanConstants.RESONANCE_FREQUENCIES_HZ,
+                FanConstants.RESONANCE_Q_FACTOR
+            )
 
             # Apply final bandpass filter to shape the spectrum
             b, a = signal.butter(
@@ -518,6 +585,116 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             except:
                 return noise * 0.6
 
+    def _generate_fan_base_noise(self, samples: int) -> np.ndarray:
+        """
+        Generate the base noise for a fan sound (mix of white and pink).
+        
+        Args:
+            samples: Number of samples to generate
+            
+        Returns:
+            Base noise array
+        """
+        # Start with white noise
+        white = self.random_state.normal(0, 0.5, samples)
+        
+        # Create pink noise using simple filtering
+        pink_filter = signal.firwin(1001, 1000 / (self.sample_rate / 2), window='hann')
+        pink = signal.lfilter(pink_filter, 1, white)
+        
+        # Normalize pink component
+        max_val = np.max(np.abs(pink))
+        if max_val > 0:
+            pink = pink / max_val * 0.5
+        
+        # Mix white and pink noise
+        return white * 0.7 + pink * 0.3
+    
+    def _generate_fan_rotation_modulation(
+        self, samples: int, duration_seconds: float, 
+        base_rotation_hz: float, speed_variation_pct: float
+    ) -> np.ndarray:
+        """
+        Generate the rotation modulation for a fan sound.
+        
+        Args:
+            samples: Number of samples to generate
+            duration_seconds: Duration in seconds
+            base_rotation_hz: Base rotation frequency in Hz
+            speed_variation_pct: Percentage of speed variation
+            
+        Returns:
+            Rotation modulation array
+        """
+        t = np.linspace(0, duration_seconds, samples, endpoint=False)
+        
+        if HAS_PERLIN and self.use_perlin:
+            try:
+                # Use perlin noise for natural speed variations
+                speed_variation = generate_perlin_noise(
+                    self.sample_rate,
+                    duration_seconds / 10, 
+                    octaves=1, 
+                    persistence=0.5,
+                    seed=self.random_state.seed
+                )
+                
+                # Stretch to get slow variations over the duration
+                indices = np.linspace(0, len(speed_variation) - 1, samples)
+                indices = np.clip(indices.astype(int), 0, len(speed_variation) - 1)
+                
+                # Modulate the rotation speed
+                rotation_speed = base_rotation_hz * (1 + speed_variation_pct * speed_variation[indices])
+                
+                # Integrate speed to get phase
+                phase = np.cumsum(rotation_speed) / self.sample_rate * 2 * np.pi
+                
+                # Calculate modulation with harmonic overtones
+                rotation_modulation = (0.08 * np.sin(phase) + 
+                                    0.04 * np.sin(2 * phase) + 
+                                    0.02 * np.sin(3 * phase))
+                
+                return rotation_modulation
+            except Exception as e:
+                logger.warning(f"Error creating perlin modulation for fan: {e}")
+                # Fall through to sine-based fallback
+        
+        # Fallback to simpler fan simulation
+        # Add a slight drift to the rotation speed
+        drift = speed_variation_pct * np.sin(2 * np.pi * 0.05 * t)
+        rotation_modulation = 0.1 * np.sin(2 * np.pi * base_rotation_hz * (1 + drift) * t)
+        
+        # Add some harmonics
+        rotation_modulation += 0.05 * np.sin(2 * 2 * np.pi * base_rotation_hz * (1 + drift) * t)
+        
+        return rotation_modulation
+    
+    def _apply_fan_resonance(
+        self, audio: np.ndarray, resonance_frequencies: List[float], q_factor: float
+    ) -> np.ndarray:
+        """
+        Apply resonance filtering to simulate fan housing.
+        
+        Args:
+            audio: Audio array to filter
+            resonance_frequencies: List of resonance frequencies in Hz
+            q_factor: Q factor for resonance filters
+            
+        Returns:
+            Filtered audio array
+        """
+        # Apply each resonance filter sequentially
+        filtered = audio.copy()
+        for freq in resonance_frequencies:
+            try:
+                b, a = signal.iirpeak(freq, q_factor, self.sample_rate)
+                filtered = signal.lfilter(b, a, filtered)
+            except Exception as e:
+                logger.warning(f"Error applying resonance filter at {freq}Hz: {e}")
+                continue
+                
+        return filtered
+
     def apply_dynamic_shushing(
         self, audio: np.ndarray, shushing: np.ndarray, params: DynamicShushing
     ) -> np.ndarray:
@@ -537,10 +714,15 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             return audio
 
         try:
-            # Extract parameters
-            base_level_db = params.base_level_db
-            cry_response_db = params.cry_response_db
-            response_time_ms = params.response_time_ms
+            # Parameter validation
+            if not isinstance(params, DynamicShushing):
+                logger.warning("Invalid dynamic shushing parameters")
+                return audio
+            
+            # Extract and validate parameters
+            base_level_db = max(-60, min(0, params.base_level_db))
+            cry_response_db = max(0, min(20, params.cry_response_db))
+            response_time_ms = max(10, min(1000, params.response_time_ms))
 
             # Convert dB difference to amplitude ratio
             level_increase = 10 ** (cry_response_db / 20.0)
@@ -548,97 +730,24 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             # Response time in samples
             response_samples = int(response_time_ms * self.sample_rate / 1000)
 
-            # Create simulated cry periods (for demonstration)
-            samples = len(audio)
-            is_stereo = len(audio.shape) > 1
-
-            # Simulate cry periods approximately every 5-10 minutes for 30-60 seconds
-            cry_periods = []
-
-            # At least 5 minutes between potential cry periods
-            interval_min_samples = 5 * 60 * self.sample_rate
-
-            # Create Perlin noise as a base for non-regular cry patterns
-            if HAS_PERLIN and self.use_perlin:
-                # Generate very slow perlin noise for cry likelihood
-                cry_likelihood = generate_perlin_noise(
-                    self.sample_rate,
-                    samples / self.sample_rate / 10, 
-                    octaves=1, 
-                    persistence=0.5,
-                    seed=self.random_state.seed
-                )
-                # Stretch to audio length
-                indices = np.linspace(0, len(cry_likelihood) - 1, samples)
-                indices = np.clip(indices.astype(int), 0, len(cry_likelihood) - 1)
-                cry_likelihood = cry_likelihood[indices]
-
-                # Threshold for cry event
-                cry_threshold = 0.6  # Adjust as needed
-
-                # Find potential cry starts
-                crossing_points = np.where(
-                    np.diff((cry_likelihood > cry_threshold).astype(int)) > 0
-                )[0]
-
-                # Filter to ensure minimum spacing
-                if len(crossing_points) > 0:
-                    filtered_points = [crossing_points[0]]
-                    for point in crossing_points[1:]:
-                        if point - filtered_points[-1] >= interval_min_samples:
-                            filtered_points.append(point)
-
-                    # Create cry periods of random lengths between 30-60 seconds
-                    for start in filtered_points:
-                        if start < samples - interval_min_samples:
-                            duration = self.random_state.randint(30, 60) * self.sample_rate
-                            end = min(start + duration, samples)
-                            cry_periods.append((start, end))
-            else:
-                # Fallback to regular intervals if no Perlin noise
-                interval_samples = 8 * 60 * self.sample_rate  # 8 minutes
-                for start in range(0, samples, interval_samples):
-                    if start < samples - interval_min_samples:
-                        duration = self.random_state.randint(30, 60) * self.sample_rate
-                        end = min(start + duration, samples)
-                        cry_periods.append((start, end))
-
-            # Create envelope for shushing (base level, with increases during cry periods)
-            envelope = np.ones(samples)
-
-            # Apply response envelope for each cry period
-            for start, end in cry_periods:
-                # Gradual ramp up at start of cry
-                ramp_up_end = min(start + response_samples, samples)
-                ramp_up = np.linspace(1.0, level_increase, ramp_up_end - start)
-                envelope[start:ramp_up_end] = ramp_up
-
-                # Sustained increased level during cry
-                sustain_end = max(ramp_up_end, min(end - response_samples, samples))
-                envelope[ramp_up_end:sustain_end] = level_increase
-
-                # Gradual ramp down at end of cry
-                if sustain_end < samples:
-                    ramp_down_end = min(sustain_end + response_samples, samples)
-                    ramp_down = np.linspace(level_increase, 1.0, ramp_down_end - sustain_end)
-                    envelope[sustain_end:ramp_down_end] = ramp_down
+            # Simulate cry periods using perlin noise
+            cry_envelope = self._generate_cry_periods(
+                len(audio), response_samples, level_increase
+            )
 
             # Apply envelope to shushing efficiently
-            dynamic_shushing = apply_modulation(shushing, envelope)
+            dynamic_shushing = apply_modulation(shushing, cry_envelope)
 
-            # Mix with original audio (ensuring compatible shapes)
-            if is_stereo:
-                # FIXED: Convert dynamic_shushing to stereo if it's mono
-                if len(dynamic_shushing.shape) == 1:
-                    dynamic_shushing_stereo = np.zeros_like(audio)
-                    for c in range(audio.shape[1]):
-                        dynamic_shushing_stereo[:, c] = dynamic_shushing
-                    dynamic_shushing = dynamic_shushing_stereo
-                
-                # Now both audio and dynamic_shushing are stereo
-                output = audio * 0.7 + dynamic_shushing * 0.3
-            else:
-                output = audio * 0.7 + dynamic_shushing * 0.3
+            # Ensure compatible shapes for mixing
+            is_stereo = len(audio.shape) > 1
+            if is_stereo and len(dynamic_shushing.shape) == 1:
+                dynamic_shushing_stereo = np.zeros_like(audio)
+                for c in range(audio.shape[1]):
+                    dynamic_shushing_stereo[:, c] = dynamic_shushing
+                dynamic_shushing = dynamic_shushing_stereo
+            
+            # Mix with original audio
+            output = audio * 0.7 + dynamic_shushing * 0.3
 
             # Normalize if needed
             max_val = np.max(np.abs(output))
@@ -668,6 +777,132 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             except:
                 # Return original audio if mixing fails
                 return audio
+    
+    def _generate_cry_periods(
+        self, samples: int, response_samples: int, level_increase: float
+    ) -> np.ndarray:
+        """
+        Generate simulated cry periods for dynamic shushing.
+        
+        Args:
+            samples: Number of samples to generate
+            response_samples: Response time in samples
+            level_increase: Level increase factor during crying
+            
+        Returns:
+            Envelope for cry-responsive shushing
+        """
+        # Create output envelope starting at base level
+        envelope = np.ones(samples, dtype=np.float32)
+        
+        # At least 5 minutes between potential cry periods
+        interval_min_samples = 5 * 60 * self.sample_rate
+        
+        if HAS_PERLIN and self.use_perlin:
+            try:
+                # Generate very slow perlin noise for cry likelihood
+                cry_likelihood = generate_perlin_noise(
+                    self.sample_rate,
+                    samples / self.sample_rate / 10, 
+                    octaves=1, 
+                    persistence=0.5,
+                    seed=self.random_state.seed
+                )
+                
+                # Stretch to audio length
+                indices = np.linspace(0, len(cry_likelihood) - 1, samples)
+                indices = np.clip(indices.astype(int), 0, len(cry_likelihood) - 1)
+                cry_likelihood = cry_likelihood[indices]
+                
+                # Find potential cry starts (threshold crossings)
+                cry_threshold = 0.6
+                crossing_points = np.where(
+                    np.diff((cry_likelihood > cry_threshold).astype(int)) > 0
+                )[0]
+                
+                # Filter to ensure minimum spacing
+                if len(crossing_points) > 0:
+                    filtered_points = [crossing_points[0]]
+                    for point in crossing_points[1:]:
+                        if point - filtered_points[-1] >= interval_min_samples:
+                            filtered_points.append(point)
+                    
+                    # Create cry periods
+                    for start in filtered_points:
+                        if start < samples - interval_min_samples:
+                            duration = self.random_state.randint(30, 60) * self.sample_rate
+                            end = min(start + duration, samples)
+                            
+                            # Apply ramp up at start of cry
+                            ramp_up_end = min(start + response_samples, samples)
+                            if ramp_up_end > start:
+                                ramp_up = np.linspace(1.0, level_increase, ramp_up_end - start)
+                                envelope[start:ramp_up_end] = ramp_up
+                            
+                            # Sustain level during cry
+                            sustain_end = max(ramp_up_end, min(end - response_samples, samples))
+                            if sustain_end > ramp_up_end:
+                                envelope[ramp_up_end:sustain_end] = level_increase
+                            
+                            # Ramp down at end of cry
+                            if sustain_end < samples:
+                                ramp_down_end = min(sustain_end + response_samples, samples)
+                                if ramp_down_end > sustain_end:
+                                    ramp_down = np.linspace(level_increase, 1.0, ramp_down_end - sustain_end)
+                                    envelope[sustain_end:ramp_down_end] = ramp_down
+            else:
+                # Use regular intervals if no Perlin noise
+                self._generate_regular_cry_periods(
+                    envelope, samples, response_samples, level_increase, interval_min_samples
+                )
+                
+            return envelope
+                
+        except Exception as e:
+            logger.warning(f"Error generating perlin-based cry periods: {e}")
+            # Fall back to regular intervals
+            self._generate_regular_cry_periods(
+                envelope, samples, response_samples, level_increase, interval_min_samples
+            )
+            return envelope
+    
+    def _generate_regular_cry_periods(
+        self, envelope: np.ndarray, samples: int, 
+        response_samples: int, level_increase: float, interval_min_samples: int
+    ) -> None:
+        """
+        Generate regularly spaced cry periods as fallback.
+        
+        Args:
+            envelope: Envelope array to fill
+            samples: Total number of samples
+            response_samples: Response time in samples
+            level_increase: Level increase factor during crying
+            interval_min_samples: Minimum interval between cries in samples
+        """
+        interval_samples = 8 * 60 * self.sample_rate  # 8 minutes
+        for start in range(0, samples, interval_samples):
+            if start < samples - interval_min_samples:
+                duration = self.random_state.randint(30, 60) * self.sample_rate
+                end = min(start + duration, samples)
+                
+                # Apply ramp up at start of cry
+                ramp_up_end = min(start + response_samples, samples)
+                if ramp_up_end > start:
+                    ramp_up = np.linspace(1.0, level_increase, ramp_up_end - start)
+                    envelope[start:ramp_up_end] = ramp_up
+                
+                # Sustain level during cry
+                sustain_end = max(ramp_up_end, min(end - response_samples, samples))
+                if sustain_end > ramp_up_end:
+                    envelope[ramp_up_end:sustain_end] = level_increase
+                
+                # Ramp down at end of cry
+                if sustain_end < samples:
+                    ramp_down_end = min(sustain_end + response_samples, samples)
+                    if ramp_down_end > sustain_end:
+                        ramp_down = np.linspace(level_increase, 1.0, ramp_down_end - sustain_end)
+                        envelope[sustain_end:ramp_down_end] = ramp_down
 
     def apply_parental_voice(
         self, audio: np.ndarray, params: ParentalVoice
@@ -687,79 +922,32 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             return audio
 
         try:
-            # Extract parameters
-            mix_level_db = params.mix_level_db
+            # Validate parameters
+            if not isinstance(params, ParentalVoice):
+                logger.warning("Invalid parental voice parameters")
+                return audio
+            
+            # Extract and validate parameters
+            mix_level_db = max(-60, min(-6, params.mix_level_db))
 
             # Convert dB to linear scale
             mix_ratio = 10 ** (mix_level_db / 20.0)
 
-            # Create simulated parental humming
+            # Get audio dimensions
             samples = len(audio)
             is_stereo = len(audio.shape) > 1
+            channels = audio.shape[1] if is_stereo else 1
 
-            # Basic parameters for a natural-sounding hum
-            hum_freq = 220.0  # Typical female hum, ~A3
-            hum_duration_seconds = 2.0
-            hum_interval_seconds = 8.0  # Space between hums
-
-            # Convert to samples
-            hum_samples = int(hum_duration_seconds * self.sample_rate)
-            interval_samples = int(hum_interval_seconds * self.sample_rate)
-
-            # Create output array
-            if is_stereo:
-                hum_output = np.zeros((samples, audio.shape[1]))
-            else:
-                hum_output = np.zeros(samples)
-
-            # Time vector for a single hum
-            t_hum = np.linspace(0, hum_duration_seconds, hum_samples, endpoint=False)
-
-            # Generate basic hum with harmonics for realism
-            hum_base = np.sin(2 * np.pi * hum_freq * t_hum)
-            hum_harmonic1 = 0.5 * np.sin(2 * np.pi * hum_freq * 2 * t_hum)  # First harmonic
-            hum_harmonic2 = 0.3 * np.sin(2 * np.pi * hum_freq * 3 * t_hum)  # Second harmonic
-            hum_harmonic3 = 0.1 * np.sin(2 * np.pi * hum_freq * 4 * t_hum)  # Third harmonic
-
-            basic_hum = hum_base + hum_harmonic1 + hum_harmonic2 + hum_harmonic3
-
-            # Apply envelope for natural attack and decay
-            envelope = np.zeros_like(basic_hum)
-            attack_samples = int(0.2 * hum_samples)  # 20% attack
-            sustain_samples = int(0.5 * hum_samples)  # 50% sustain
-            decay_samples = hum_samples - attack_samples - sustain_samples  # 30% decay
-
-            # Create segments
-            envelope[:attack_samples] = np.linspace(0, 1, attack_samples)
-            envelope[attack_samples : attack_samples + sustain_samples] = 1.0
-            envelope[attack_samples + sustain_samples :] = np.linspace(1, 0, decay_samples)
-
-            # Apply envelope
-            hum = basic_hum * envelope
-
-            # Apply vocal formant filtering for more realism
-            # Simplified formant filter
-            b, a = signal.butter(2, [400 / (self.sample_rate / 2), 2000 / (self.sample_rate / 2)], "band")
-            hum = signal.lfilter(b, a, hum)
-
-            # Place hums at regular intervals
-            cycle_length = hum_samples + interval_samples
-            num_cycles = (samples // cycle_length) + 1
-
-            for i in range(num_cycles):
-                start_idx = i * cycle_length
-                end_idx = min(start_idx + hum_samples, samples)
-                hum_len = end_idx - start_idx
-
-                if hum_len > 0:
-                    if is_stereo:
-                        for c in range(audio.shape[1]):
-                            hum_output[start_idx:end_idx, c] = hum[:hum_len]
-                    else:
-                        hum_output[start_idx:end_idx] = hum[:hum_len]
+            # Generate the humming sound
+            hum_output = self._generate_parental_humming(
+                samples, channels, is_stereo
+            )
 
             # Mix with original audio at specified level
-            output = audio * (1 - mix_ratio) + hum_output * mix_ratio
+            if is_stereo:
+                output = audio * (1 - mix_ratio) + hum_output * mix_ratio
+            else:
+                output = audio * (1 - mix_ratio) + hum_output * mix_ratio
 
             return self.sanitize_audio(output)
 
@@ -767,3 +955,79 @@ class NaturalSoundGenerator(SoundProfileGenerator):
             logger.error(f"Error applying parental voice: {e}")
             # Return original audio if voice processing fails
             return audio
+    
+    def _generate_parental_humming(
+        self, samples: int, channels: int, is_stereo: bool
+    ) -> np.ndarray:
+        """
+        Generate a parental humming sound.
+        
+        Args:
+            samples: Number of samples to generate
+            channels: Number of audio channels
+            is_stereo: Whether the output should be stereo
+            
+        Returns:
+            Humming sound array
+        """
+        # Create output array with appropriate shape
+        if is_stereo:
+            hum_output = np.zeros((samples, channels), dtype=np.float32)
+        else:
+            hum_output = np.zeros(samples, dtype=np.float32)
+            
+        # Basic parameters for a natural-sounding hum
+        hum_freq = 220.0  # Typical female hum, ~A3
+        hum_duration_seconds = 2.0
+        hum_interval_seconds = 8.0  # Space between hums
+
+        # Convert to samples
+        hum_samples = int(hum_duration_seconds * self.sample_rate)
+        interval_samples = int(hum_interval_seconds * self.sample_rate)
+
+        # Time vector for a single hum
+        t_hum = np.linspace(0, hum_duration_seconds, hum_samples, endpoint=False)
+
+        # Generate basic hum with harmonics for realism
+        hum_base = np.sin(2 * np.pi * hum_freq * t_hum)
+        hum_harmonic1 = 0.5 * np.sin(2 * np.pi * hum_freq * 2 * t_hum)  # First harmonic
+        hum_harmonic2 = 0.3 * np.sin(2 * np.pi * hum_freq * 3 * t_hum)  # Second harmonic
+        hum_harmonic3 = 0.1 * np.sin(2 * np.pi * hum_freq * 4 * t_hum)  # Third harmonic
+
+        basic_hum = hum_base + hum_harmonic1 + hum_harmonic2 + hum_harmonic3
+
+        # Apply envelope for natural attack and decay
+        attack_samples = int(0.2 * hum_samples)  # 20% attack
+        sustain_samples = int(0.5 * hum_samples)  # 50% sustain
+        decay_samples = hum_samples - attack_samples - sustain_samples  # 30% decay
+
+        # Create envelope segments
+        envelope = np.zeros_like(basic_hum)
+        envelope[:attack_samples] = np.linspace(0, 1, attack_samples)
+        envelope[attack_samples:attack_samples+sustain_samples] = 1.0
+        envelope[attack_samples+sustain_samples:] = np.linspace(1, 0, decay_samples)
+
+        # Apply envelope
+        hum = basic_hum * envelope
+
+        # Apply vocal formant filtering for more realism
+        b, a = signal.butter(2, [400 / (self.sample_rate / 2), 2000 / (self.sample_rate / 2)], "band")
+        hum = signal.lfilter(b, a, hum)
+
+        # Place hums at regular intervals
+        cycle_length = hum_samples + interval_samples
+        num_cycles = (samples // cycle_length) + 1
+
+        for i in range(num_cycles):
+            start_idx = i * cycle_length
+            end_idx = min(start_idx + hum_samples, samples)
+            hum_len = end_idx - start_idx
+
+            if hum_len > 0:
+                if is_stereo:
+                    for c in range(channels):
+                        hum_output[start_idx:end_idx, c] = hum[:hum_len]
+                else:
+                    hum_output[start_idx:end_idx] = hum[:hum_len]
+
+        return hum_output
